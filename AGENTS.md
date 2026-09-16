@@ -14,3 +14,10 @@ This repository contains a native Rust/GPUI macOS app for adding local projects 
 - Keep the implementation limited to the workflow documented in `MVP_CONCEPT.md`, including its stated unresolved decisions. Do not infer additional features from reference applications.
 - Keep product requirements in `MVP_CONCEPT.md`, terminology in `CONTEXT.md`, and technical decisions in `docs/`.
 - Check documentation links and consistency after edits.
+
+## Keyboard interface
+
+- Follow the keyboard workflow in `MVP_CONCEPT.md` for every new UI control. Provide visible focus, keyboard activation, and shortcut hints.
+- Keep printable navigation shortcuts inactive inside text inputs. Use standard text editing without Vim modes.
+- Keep filtering and result navigation on the same result set. Preserve query text when switching projects.
+- Document new search qualifiers and reject unsupported syntax visibly.

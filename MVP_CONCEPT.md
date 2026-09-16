@@ -8,18 +8,26 @@ The stacked-PR direction replaces the earlier manual-only workflow. The current 
 
 ## Current scaffold
 
-The initial usable scaffold lets the owner add local repositories and fetch open issues from public GitHub repositories. It defaults to all open issues and offers a `ready-for-agent` filter. This browsing mode does not authorize execution or relax the run readiness rules below. Execution controls are not implemented yet.
+The initial usable scaffold lets the owner add local repositories and fetch open issues from public GitHub repositories. It fetches up to ten results for the selected project at a time and provides a search field with GitHub-style qualifiers, including `label:ready-for-agent`. **Load more** follows GitHub pagination for that project. **All projects** combines results already fetched during the current session; it does not start a broader request. This browsing mode does not authorize execution or relax the run readiness rules below. Execution controls are not implemented yet.
 
 ## Workflow
 
 1. Add a project by selecting an existing, initialized local repository. Identify its GitHub repository from its Git remote.
-2. Click **Search issues** to list open issues labeled `ready-for-agent` across all added projects.
+2. Select a project and refresh its open issues. The first request is capped at ten results; use **Load more** when more are available. Filter the fetched results with `label:ready-for-agent` when reviewing execution candidates.
 3. The owner starts a run over open issues labeled `ready-for-agent` across added projects. Start eligible issues up to the concurrency limit configured in Settings. Require each issue's own readiness label, its parent's readiness label when a parent exists, and eligible dependencies; show why blocked issues cannot start.
 4. Save an execution record in the local database, including the issue identity, starting description, parent context when present, status, and creation time. Give the agent the child issue as its task and the parent issue as the big-picture context.
 5. Create a dedicated worktree and branch. Start independent work from the latest fetched GitHub default branch; build dependent work on its eligible predecessor's unmerged branch. Run the project's optional setup command, then start Codex in that worktree.
 6. Show execution status, agent output, and errors.
 7. Publish execution branches and open pull requests. A dependent issue's PR targets its predecessor's branch, forming a stack. The timing of publication relative to successor startup is not yet specified.
 8. When A finishes, automatically start eligible dependent issue B within the owner's authorized scope, building on A's changes. The owner reviews and merges the resulting PRs manually.
+
+## Keyboard interface
+
+All app workflows must be usable with the keyboard, with visible shortcut hints and focus indicators. ⌘1 through ⌘9 select projects in sidebar order; ⌘0 selects All projects. Projects beyond the ninth remain reachable through keyboard focus.
+
+The issue search field combines text and filters. `/` or ⌘F focuses the field. Ordinary typing, selection, and clipboard editing use standard text input, without Vim modes. Search applies to fetched open issues across added projects, narrowed by the selected sidebar project. Title text and GitHub-style qualifiers such as `label:ready-for-agent`, `-label:bug`, `repo:owner/name`, and quoted label names can be combined. Show unsupported or incomplete filters explicitly rather than silently ignoring them. Enter in search or ⌘R refreshes only the selected project and fetches its first page; **Load more** fetches its next page. Esc moves focus to results without clearing the query. Arrow keys and `j`/`k` browse results outside the field, and Enter opens an issue. Tab and Shift-Tab reach other controls.
+
+This is a local search over fetched open issues, not a GitHub-wide search or an implementation of every GitHub qualifier. It does not expand execution eligibility.
 
 ## Rules
 

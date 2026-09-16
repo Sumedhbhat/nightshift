@@ -1,12 +1,17 @@
+mod text_input;
+
 use gpui::{
-    App, Bounds, Context, FocusHandle, KeyBinding, PathPromptOptions, Role, Task, TitlebarOptions,
-    Window, WindowBounds, WindowOptions, actions, div, prelude::*, px, rgb, size, uniform_list,
+    App, Bounds, Context, FocusHandle, Focusable, KeyBinding, PathPromptOptions, Role, Task,
+    TitlebarOptions, Window, WindowBounds, WindowOptions, actions, div, prelude::*, px, rgb, size,
+    uniform_list,
 };
 use nightshift::{
     domain::Project,
     github::{self, GitHub, Issue, Remote},
     storage::{self, Store},
 };
+use std::collections::HashMap;
+use text_input::TextInput;
 use tokio::runtime::Handle;
 
 pub type Startup = tokio::sync::oneshot::Receiver<storage::Result<(Store, Vec<Project>)>>;
@@ -24,11 +29,25 @@ actions!(
         Close,
         AddProject,
         SearchIssues,
-        ToggleFilter,
+        LoadMore,
+        FocusSearch,
+        FocusResults,
         NextFocus,
-        PreviousFocus
+        PreviousFocus,
+        Activate,
+        NextIssue,
+        PreviousIssue,
+        OpenIssue
     ]
 );
+
+#[derive(Clone, PartialEq, gpui::Action)]
+#[action(no_json)]
+struct SelectProject(usize);
+
+fn project_shortcut(index: usize) -> Option<String> {
+    (index < 9).then(|| format!("⌘{}", index + 1))
+}
 
 struct IssueRow {
     project_id: i64,
@@ -43,9 +62,14 @@ struct Nightshift {
     selected: Option<i64>,
     issues: Vec<IssueRow>,
     remotes: Vec<Remote>,
-    ready_only: bool,
+    active_issue: Option<usize>,
+    issue_scroll: gpui::UniformListScrollHandle,
+    search_input: gpui::Entity<TextInput>,
+    query_text: String,
+    query: Result<nightshift::issue_query::IssueQuery, String>,
+    _input_subscription: gpui::Subscription,
     busy: bool,
-    searched: bool,
+    pages: HashMap<i64, Option<String>>,
     status: String,
     errors: Vec<String>,
     _startup: Task<()>,
@@ -58,6 +82,26 @@ impl Nightshift {
     fn new(window: &mut Window, runtime: Handle, startup: Startup, cx: &mut Context<Self>) -> Self {
         let focus = cx.focus_handle();
         focus.focus(window, cx);
+        let search_input = cx.new(TextInput::new);
+        let input_subscription = cx.observe(&search_input, |this, input, cx| {
+            let text = input.read(cx).text();
+            if this.query_text != text {
+                this.query_text = text.to_owned();
+                this.query = nightshift::issue_query::IssueQuery::parse(text);
+                this.active_issue = None;
+                this.issue_scroll
+                    .scroll_to_item(0, gpui::ScrollStrategy::Top);
+            }
+            cx.notify();
+        });
+        cx.on_focus(&search_input.focus_handle(cx), window, |_, _, cx| {
+            cx.notify()
+        })
+        .detach();
+        cx.on_blur(&search_input.focus_handle(cx), window, |_, _, cx| {
+            cx.notify()
+        })
+        .detach();
         let task = cx.spawn(async move |this, cx| {
             let result = startup.await;
             let _ = this.update(cx, |this, cx| {
@@ -69,7 +113,7 @@ impl Nightshift {
                         this.status = if this.projects.is_empty() {
                             "Add a project to get started."
                         } else {
-                            "Projects loaded. Click Search issues to fetch from GitHub."
+                            "Projects loaded. Press / to search, then Enter to fetch from GitHub."
                         }
                         .into();
                     }
@@ -90,9 +134,14 @@ impl Nightshift {
             selected: None,
             issues: vec![],
             remotes: vec![],
-            ready_only: false,
+            active_issue: None,
+            issue_scroll: gpui::UniformListScrollHandle::new(),
+            search_input,
+            query_text: String::new(),
+            query: Ok(Default::default()),
+            _input_subscription: input_subscription,
             busy: true,
-            searched: false,
+            pages: HashMap::new(),
             status: "Loading projects…".into(),
             errors: vec![],
             _startup: task,
@@ -100,6 +149,48 @@ impl Nightshift {
             _save: None,
             _search: None,
         }
+    }
+
+    fn select_project(
+        &mut self,
+        action: &SelectProject,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let selected = if action.0 == 0 {
+            None
+        } else if let Some(project) = self.projects.get(action.0 - 1) {
+            Some(project.id)
+        } else {
+            return;
+        };
+        self.selected = selected;
+        self.focus.focus(window, cx);
+        self.active_issue = None;
+        self.issue_scroll
+            .scroll_to_item(0, gpui::ScrollStrategy::Top);
+        cx.notify();
+    }
+
+    fn move_issue(&mut self, forward: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let visible = self.visible_issues();
+        if visible.is_empty() {
+            return;
+        }
+        let current = visible
+            .iter()
+            .position(|index| Some(*index) == self.active_issue);
+        let next = match current {
+            Some(index) if forward => (index + 1).min(visible.len() - 1),
+            Some(index) => index.saturating_sub(1),
+            None if forward => 0,
+            None => visible.len() - 1,
+        };
+        self.focus.focus(window, cx);
+        self.active_issue = Some(visible[next]);
+        self.issue_scroll
+            .scroll_to_item(next, gpui::ScrollStrategy::Center);
+        cx.notify();
     }
 
     fn add_project(&mut self, _: &AddProject, _: &mut Window, cx: &mut Context<Self>) {
@@ -168,6 +259,7 @@ impl Nightshift {
             .find(|p| p.checkout_path == remote.checkout)
         {
             self.selected = Some(existing.id);
+            self.active_issue = None;
             self.remotes.clear();
             self.status = "This project is already added.".into();
             cx.notify();
@@ -190,12 +282,12 @@ impl Nightshift {
                 match result {
                     Ok(Ok(project)) => {
                         this.selected = Some(project.id);
+                        this.active_issue = None;
                         this.status = format!(
-                            "Added {}/{}. Click Search issues to fetch its open issues.",
+                            "Added {}/{}. Press ⌘R to fetch open issues.",
                             project.owner, project.name
                         );
                         this.projects.push(project);
-                        this.searched = false;
                     }
                     Ok(Err(error)) => this.status = error,
                     Err(error) => this.status = format!("Could not add project: {error}"),
@@ -206,54 +298,107 @@ impl Nightshift {
         cx.notify();
     }
 
-    fn toggle_filter(&mut self, _: &ToggleFilter, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.busy {
-            self.ready_only = !self.ready_only;
-            self.search(&SearchIssues, window, cx);
-            cx.notify();
-        }
+    fn visible_issues(&self) -> Vec<usize> {
+        let Ok(query) = &self.query else {
+            return vec![];
+        };
+        self.issues
+            .iter()
+            .enumerate()
+            .filter(|(_, row)| {
+                self.selected.is_none_or(|id| id == row.project_id)
+                    && query.matches(&row.repository, &row.issue)
+            })
+            .map(|(index, _)| index)
+            .collect()
     }
 
     fn search(&mut self, _: &SearchIssues, _: &mut Window, cx: &mut Context<Self>) {
-        if self.busy || self.projects.is_empty() {
+        self.fetch_issues(false, cx);
+    }
+
+    fn load_more(&mut self, _: &LoadMore, _: &mut Window, cx: &mut Context<Self>) {
+        self.fetch_issues(true, cx);
+    }
+
+    fn fetch_issues(&mut self, append: bool, cx: &mut Context<Self>) {
+        if self.busy || self.query.is_err() {
             return;
         }
+        let Some(project) = self
+            .projects
+            .iter()
+            .find(|project| Some(project.id) == self.selected)
+            .cloned()
+        else {
+            self.status = "Select a project to fetch its issues. All projects shows issues already fetched this session.".into();
+            cx.notify();
+            return;
+        };
+        let cursor = if append {
+            let Some(cursor) = self.pages.get(&project.id).and_then(Clone::clone) else {
+                return;
+            };
+            Some(cursor)
+        } else {
+            None
+        };
         self.busy = true;
         self.errors.clear();
-        self.issues.clear();
-        self.searched = false;
-        self.status = "Fetching open issues from GitHub…".into();
-        let projects = self.projects.clone();
-        let ready = self.ready_only;
+        self.active_issue = None;
+        if !append {
+            self.issues.retain(|row| row.project_id != project.id);
+            self.pages.remove(&project.id);
+        }
+        let repository = format!("{}/{}", project.owner, project.name);
+        self.status = if append {
+            format!("Loading 10 more open issues for {repository}…")
+        } else {
+            format!("Fetching the first 10 open issues for {repository}…")
+        };
+        let project_id = project.id;
         let work = self.runtime.spawn(async move {
             let github = GitHub::new()?;
-            let mut rows = Vec::new();
-            let mut errors = Vec::new();
-            for project in projects {
-                let result = github.issues(&project, ready).await;
-                let repository = format!("{}/{}", project.owner, project.name);
-                if let Some(error) = result.error {
-                    errors.push(format!("{repository}: {error}"));
-                }
-                rows.extend(result.issues.into_iter().map(|issue| IssueRow {
-                    project_id: project.id,
-                    repository: repository.clone(),
-                    issue,
-                }));
-            }
-            Ok::<_, String>((rows, errors))
+            Ok::<_, String>(github.issue_page(&project, false, cursor.as_deref()).await)
         });
         self._search = Some(cx.spawn(async move |this, cx| {
             let result = work.await;
             let _ = this.update(cx, |this, cx| {
-                this.busy = false; this.searched = true;
+                this.busy = false;
                 match result {
-                    Ok(Ok((rows, errors))) => {
-                        this.status = if errors.is_empty() { format!("Fetched {} open issues. Click an issue to open it on GitHub.", rows.len()) } else { format!("Fetched {} issues. Some results are incomplete; see the errors below.", rows.len()) };
-                        this.issues = rows; this.errors = errors;
+                    Ok(Ok(page)) => {
+                        if let Some(error) = page.error {
+                            this.status = format!("Could not fetch issues for {repository}.");
+                            this.errors.push(format!("{repository}: {error}"));
+                        } else {
+                            let received = page.issues.len();
+                            for issue in page.issues {
+                                if !this.issues.iter().any(|row| {
+                                    row.project_id == project_id && row.issue.number == issue.number
+                                }) {
+                                    this.issues.push(IssueRow {
+                                        project_id,
+                                        repository: repository.clone(),
+                                        issue,
+                                    });
+                                }
+                            }
+                            let has_more = page.next.is_some();
+                            this.pages.insert(project_id, page.next);
+                            let cached = this
+                                .issues
+                                .iter()
+                                .filter(|row| row.project_id == project_id)
+                                .count();
+                            this.status = format!(
+                                "{} {received} open issues for {repository}; {cached} cached{}.",
+                                if append { "Loaded" } else { "Fetched" },
+                                if has_more { " · more available" } else { "" }
+                            );
+                        }
                     }
                     Ok(Err(error)) => this.status = error,
-                    Err(error) => this.status = format!("Search failed: {error}"),
+                    Err(error) => this.status = format!("Issue fetch failed: {error}"),
                 }
                 cx.notify();
             });
@@ -273,363 +418,231 @@ fn button(id: &'static str, label: &'static str, enabled: bool) -> gpui::Statefu
         .py_2()
         .rounded_md()
         .border_1()
-        .border_color(rgb(if enabled { ACCENT } else { LINE }))
-        .text_color(rgb(if enabled { ACCENT } else { MUTED }))
+        .border_color(rgb(LINE))
+        .text_color(rgb(if enabled { TEXT } else { MUTED }))
         .when(enabled, |style| {
             style.cursor_pointer().hover(|s| s.bg(rgb(LINE)))
         })
-        .focus(|style| style.border_color(rgb(TEXT)))
+        .focus(|style| style.border_color(rgb(ACCENT)))
         .child(label)
 }
 
 impl Render for Nightshift {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let visible: Vec<usize> = self
-            .issues
-            .iter()
-            .enumerate()
-            .filter(|(_, row)| self.selected.is_none_or(|id| id == row.project_id))
-            .map(|(index, _)| index)
-            .collect();
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let visible = self.visible_issues();
         let count = visible.len();
+        let scope_fetched = self.selected.map_or(self.issues.len(), |id| {
+            self.issues
+                .iter()
+                .filter(|row| row.project_id == id)
+                .count()
+        });
+        let scope_searched = self
+            .selected
+            .map_or(!self.pages.is_empty(), |id| self.pages.contains_key(&id));
+        let has_more = self
+            .selected
+            .is_some_and(|id| self.pages.get(&id).is_some_and(Option::is_some));
         let heading = self
             .projects
             .iter()
             .find(|p| Some(p.id) == self.selected)
             .map(|p| format!("{}/{}", p.owner, p.name))
             .unwrap_or_else(|| "All projects".into());
+        let searching = self.search_input.focus_handle(cx).is_focused(window);
         let empty = if self.projects.is_empty() {
-            "Add your first project\nChoose a local Git repository with a public github.com remote."
+            "Add a local project with ⌘O to get started."
+        } else if self.query.is_err() {
+            "Correct the search above to see matching issues."
         } else if self.busy {
-            "Fetching issues…"
-        } else if !self.searched {
-            "Ready to search\nClick Search issues to fetch open issues from your public repositories."
+            "Fetching open issues from GitHub…"
+        } else if self.selected.is_none() && self.issues.is_empty() {
+            "Select a project to fetch its first 10 open issues."
+        } else if !scope_searched {
+            "Press Enter in search or ⌘R to fetch this project's first 10 open issues."
         } else if !self.errors.is_empty() {
-            "No issues loaded for this project. Check the error message below and try again."
-        } else if self.ready_only {
-            "No open issues labeled ready-for-agent were found."
+            "No matching issues loaded. Review the errors below, then refresh with ⌘R."
         } else {
-            "No open issues were found for this project."
+            "No matching open issues. Edit the search or use ⌘0 to check all projects."
         };
-        div()
-            .id("nightshift")
-            .role(Role::Application)
-            .aria_label("Nightshift")
-            .track_focus(&self.focus)
-            .key_context("Nightshift")
+        div().id("nightshift").role(Role::Application).aria_label("Nightshift")
+            .track_focus(&self.focus).key_context("Nightshift")
             .on_action(cx.listener(Self::add_project))
             .on_action(cx.listener(Self::search))
-            .on_action(cx.listener(Self::toggle_filter))
+            .on_action(cx.listener(Self::load_more))
+            .on_action(cx.listener(Self::select_project))
+            .on_action(cx.listener(|this, _: &FocusSearch, window, cx| {
+                this.search_input.focus_handle(cx).focus(window, cx);
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &FocusResults, window, cx| {
+                this.focus.focus(window, cx);
+                if this.active_issue.is_none() { this.move_issue(true, window, cx); }
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &NextIssue, window, cx| this.move_issue(true, window, cx)))
+            .on_action(cx.listener(|this, _: &PreviousIssue, window, cx| this.move_issue(false, window, cx)))
+            .on_action(cx.listener(|this, _: &OpenIssue, _, cx| {
+                if let Some(row) = this.active_issue.and_then(|index| this.issues.get(index)) {
+                    cx.open_url(&row.issue.url);
+                }
+            }))
             .on_action(|_: &Close, window, _| window.remove_window())
             .on_action(|_: &NextFocus, window, cx| window.focus_next(cx))
             .on_action(|_: &PreviousFocus, window, cx| window.focus_prev(cx))
-            .size_full()
-            .flex()
-            .flex_col()
-            .bg(rgb(BG))
-            .text_color(rgb(TEXT))
-            .font_family(".AppleSystemUIFont")
-            .text_sm()
-            .child(
-                div()
-                    .px_6()
-                    .h_20()
-                    .flex_none()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .border_b_1()
-                    .border_color(rgb(LINE))
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap_1()
-                            .child(
-                                div()
-                                    .font_family("Avenir Next")
-                                    .text_2xl()
-                                    .child("Nightshift"),
-                            )
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(rgb(MUTED))
-                                    .child("Projects and public GitHub issues"),
-                            ),
-                    )
-                    .child(
-                        button(
-                            "add-project",
-                            "Add project",
-                            !self.busy && self.store.is_some(),
-                        )
-                        .key_context("AddButton")
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.add_project(&AddProject, window, cx)
-                        })),
-                    ),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_1()
-                    .min_h_0()
-                    .child(
-                        div()
-                            .w(px(280.))
-                            .flex_none()
-                            .flex()
-                            .flex_col()
-                            .border_r_1()
-                            .border_color(rgb(LINE))
-                            .child(div().px_5().py_4().text_color(rgb(MUTED)).child("PROJECTS"))
-                            .child(
-                                div()
-                                    .id("all-projects")
-                                    .role(Role::Button)
-                                    .aria_label("All projects")
-                                    .px_5()
-                                    .py_3()
-                                    .cursor_pointer()
-                                    .bg(rgb(if self.selected.is_none() { LINE } else { BG }))
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.selected = None;
-                                        cx.notify();
+            .size_full().flex().flex_col().bg(rgb(BG)).text_color(rgb(TEXT))
+            .font_family(".AppleSystemUIFont").text_sm()
+            .child(div().flex().flex_1().min_h_0()
+                .child(div().w(px(248.)).flex_none().flex().flex_col().border_r_1().border_color(rgb(LINE))
+                    .child(div().px_5().py_5().font_family("Avenir Next").text_xl().child("Nightshift"))
+                    .child(div().px_5().pb_3().text_xs().text_color(rgb(MUTED)).child("PROJECTS"))
+                    .child(div().id("all-projects").role(Role::Button).aria_label("All projects, Command 0")
+                        .focusable().tab_stop(true).key_context("Selectable")
+                        .border_l_2().border_color(rgb(if self.selected.is_none() { ACCENT } else { BG }))
+                        .focus(|s| s.border_color(rgb(TEXT)))
+                        .px_4().py_3().flex().items_center().justify_between().cursor_pointer()
+                        .bg(rgb(if self.selected.is_none() { LINE } else { BG }))
+                        .on_action(cx.listener(|this, _: &Activate, window, cx| this.select_project(&SelectProject(0), window, cx)))
+                        .on_click(cx.listener(|this, _, window, cx| this.select_project(&SelectProject(0), window, cx)))
+                        .child("All projects").child(shortcut("⌘0")))
+                    .child(div().id("projects").overflow_y_scroll().flex_1().min_h_0()
+                        .children(self.projects.iter().enumerate().map(|(index, project)| {
+                            let selected = self.selected == Some(project.id);
+                            div().id(("project", project.id as usize)).role(Role::Button)
+                                .aria_label(format!("{}/{} {}", project.owner, project.name, project_shortcut(index).unwrap_or_default()))
+                                .focusable().tab_stop(true).key_context("Selectable")
+                                .border_l_2().border_color(rgb(if selected { ACCENT } else { BG }))
+                                .focus(|s| s.border_color(rgb(TEXT)))
+                                .px_4().py_3().flex().items_center().justify_between().gap_2().cursor_pointer()
+                                .bg(rgb(if selected { LINE } else { BG }))
+                                .on_action(cx.listener(move |this, _: &Activate, window, cx| this.select_project(&SelectProject(index + 1), window, cx)))
+                                .on_click(cx.listener(move |this, _, window, cx| this.select_project(&SelectProject(index + 1), window, cx)))
+                                .child(div().min_w_0().flex_1().flex().flex_col()
+                                    .child(div().truncate().child(project.name.clone()))
+                                    .child(div().truncate().text_xs().text_color(rgb(MUTED)).child(project.owner.clone())))
+                                .children(project_shortcut(index).map(shortcut))
+                        })))
+                    .child(div().p_4().child(button("add-project", "Add project  ⌘O", !self.busy && self.store.is_some())
+                        .w_full().key_context("AddButton")
+                        .on_click(cx.listener(|this, _, window, cx| this.add_project(&AddProject, window, cx))))))
+                .child(div().flex_1().min_w_0().flex().flex_col().bg(rgb(PANEL))
+                    .child(div().p_5().flex_none().flex().flex_col().gap_3()
+                        .child(div().flex().items_center().justify_between().gap_3()
+                            .child(div().min_w_0().truncate().text_lg().child(heading))
+                            .child(div().flex_none().text_xs().text_color(rgb(MUTED)).child("OPEN ISSUES")))
+                        .child(div().flex().items_center().gap_2()
+                            .child(div().flex_1().min_w_0().child(self.search_input.clone()))
+                            .children(has_more.then(|| button("load-more", "Load more", !self.busy)
+                                .key_context("LoadMoreButton")
+                                .on_click(cx.listener(|this, _, window, cx| this.load_more(&LoadMore, window, cx)))))
+                            .child(button("refresh", if self.busy { "Fetching…" } else { "Refresh  ⌘R" }, !self.busy && self.selected.is_some())
+                                .key_context("SearchButton")
+                                .on_click(cx.listener(|this, _, window, cx| this.search(&SearchIssues, window, cx)))))
+                        .child(div().text_xs().text_color(rgb(MUTED))
+                            .child("Title text  ·  label:ready-for-agent  ·  -label:bug  ·  repo:owner/name  ·  label:\"help wanted\""))
+                        .children(self.query.as_ref().err().map(|error| div().text_color(rgb(0xf2b8a5)).child(error.clone())))
+                        .child(div().flex().justify_between().gap_2().text_xs().text_color(rgb(MUTED))
+                            .child(format!("{count} matches · {scope_fetched} fetched"))
+                            .child(if searching { "Enter refreshes · Esc or ↓ goes to results" } else { "/ to search · ↑ ↓ or j k to browse · Enter to open" })))
+                    .children(self.remotes.iter().cloned().enumerate().map(|(index, remote)| {
+                        let keyboard_remote = remote.clone();
+                        div().id(("remote", index)).role(Role::Button)
+                            .aria_label(format!("Use {}: {}/{}", remote.name, remote.owner, remote.repo))
+                            .focusable().tab_stop(true).key_context("Selectable")
+                            .border_1().border_color(rgb(LINE)).focus(|s| s.border_color(rgb(ACCENT)))
+                            .mx_5().p_3().mb_2().cursor_pointer()
+                            .child(format!("Use {} → {}/{}", remote.name, remote.owner, remote.repo))
+                            .on_action(cx.listener(move |this, _: &Activate, _, cx| {
+                                if !this.busy { this.save_remote(keyboard_remote.clone(), cx); }
+                            }))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                if !this.busy { this.save_remote(remote.clone(), cx); }
+                            }))
+                    }))
+                    .child(if count == 0 {
+                        div().flex_1().p_6().text_color(rgb(MUTED)).child(empty).into_any_element()
+                    } else {
+                        uniform_list("issues", count, cx.processor(move |this, range: std::ops::Range<usize>, _, cx| {
+                            range.map(|index| {
+                                let issue_index = visible[index];
+                                let row = &this.issues[issue_index];
+                                let url = row.issue.url.clone();
+                                let keyboard_url = url.clone();
+                                let selected = this.active_issue == Some(issue_index);
+                                div().id(("issue", issue_index)).role(Role::Link)
+                                    .aria_label(format!("{} #{} {}", row.repository, row.issue.number, row.issue.title))
+                                    .focusable().tab_stop(true).key_context("Selectable")
+                                    .border_l_2().border_color(rgb(if selected { ACCENT } else { PANEL }))
+                                    .focus(|s| s.border_color(rgb(TEXT)).bg(rgb(LINE)))
+                                    .bg(rgb(if selected { LINE } else { PANEL }))
+                                    .w_full().h(px(76.)).px_5().flex().flex_col().justify_center().gap_1()
+                                    .cursor_pointer().hover(|s| s.bg(rgb(LINE)))
+                                    .on_action(move |_: &Activate, _, cx| cx.open_url(&keyboard_url))
+                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                        this.active_issue = Some(issue_index);
+                                        this.focus.focus(window, cx);
+                                        cx.open_url(&url); cx.notify();
                                     }))
-                                    .child(format!("All projects ({})", self.projects.len())),
-                            )
-                            .child(
-                                div()
-                                    .id("projects")
-                                    .overflow_y_scroll()
-                                    .flex_1()
-                                    .min_h_0()
-                                    .children(self.projects.iter().map(|project| {
-                                        let id = project.id;
-                                        div()
-                                            .id(("project", id as usize))
-                                            .role(Role::Button)
-                                            .aria_label(format!(
-                                                "{}/{}",
-                                                project.owner, project.name
-                                            ))
-                                            .px_5()
-                                            .py_3()
-                                            .cursor_pointer()
-                                            .bg(rgb(if self.selected == Some(id) {
-                                                LINE
-                                            } else {
-                                                BG
-                                            }))
-                                            .on_click(cx.listener(move |this, _, _, cx| {
-                                                this.selected = Some(id);
-                                                cx.notify();
-                                            }))
-                                            .child(format!("{}/{}", project.owner, project.name))
-                                    })),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .flex()
-                            .flex_col()
-                            .bg(rgb(PANEL))
-                            .child(
-                                div()
-                                    .p_5()
-                                    .flex_none()
-                                    .flex()
-                                    .items_center()
-                                    .justify_between()
-                                    .gap_3()
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .flex_col()
-                                            .gap_1()
-                                            .child(div().text_xl().child(heading))
-                                            .child(
-                                                div()
-                                                    .text_color(rgb(MUTED))
-                                                    .child(format!("{count} open issues")),
-                                            ),
-                                    )
-                                    .child(
-                                        button(
-                                            "search-issues",
-                                            if self.busy {
-                                                "Working…"
-                                            } else {
-                                                "Search issues"
-                                            },
-                                            !self.busy && !self.projects.is_empty(),
-                                        )
-                                        .key_context("SearchButton")
-                                        .on_click(
-                                            cx.listener(|this, _, window, cx| {
-                                                this.search(&SearchIssues, window, cx)
-                                            }),
-                                        ),
-                                    ),
-                            )
-                            .child(
-                                div().px_5().pb_4().child(
-                                    button(
-                                        "filter",
-                                        if self.ready_only {
-                                            "Filter: ready-for-agent"
-                                        } else {
-                                            "Filter: all open issues"
-                                        },
-                                        !self.busy,
-                                    )
-                                    .key_context("FilterButton")
-                                    .on_click(cx.listener(
-                                        |this, _, window, cx| {
-                                            this.toggle_filter(&ToggleFilter, window, cx)
-                                        },
-                                    )),
-                                ),
-                            )
-                            .children(self.remotes.iter().cloned().enumerate().map(
-                                |(index, remote)| {
-                                    div()
-                                        .id(("remote", index))
-                                        .role(Role::Button)
-                                        .aria_label(format!(
-                                            "Use {}: {}/{}",
-                                            remote.name, remote.owner, remote.repo
-                                        ))
-                                        .mx_5()
-                                        .p_3()
-                                        .mb_2()
-                                        .bg(rgb(LINE))
-                                        .cursor_pointer()
-                                        .child(format!(
-                                            "Use {} → {}/{}",
-                                            remote.name, remote.owner, remote.repo
-                                        ))
-                                        .on_click(cx.listener(move |this, _, _, cx| {
-                                            if !this.busy {
-                                                this.save_remote(remote.clone(), cx);
-                                            }
-                                        }))
-                                },
-                            ))
-                            .child(if count == 0 {
-                                div()
-                                    .flex_1()
-                                    .p_6()
-                                    .text_color(rgb(MUTED))
-                                    .child(empty)
-                                    .into_any_element()
-                            } else {
-                                uniform_list(
-                                    "issues",
-                                    count,
-                                    cx.processor(
-                                        move |this, range: std::ops::Range<usize>, _, _| {
-                                            range
-                                                .map(|index| {
-                                                    let row = &this.issues[visible[index]];
-                                                    let url = row.issue.url.clone();
-                                                    div()
-                                                        .id(index)
-                                                        .w_full()
-                                                        .h(px(88.))
-                                                        .px_5()
-                                                        .flex()
-                                                        .flex_col()
-                                                        .justify_center()
-                                                        .gap_1()
-                                                        .border_t_1()
-                                                        .border_color(rgb(LINE))
-                                                        .cursor_pointer()
-                                                        .hover(|style| style.bg(rgb(LINE)))
-                                                        .role(Role::Link)
-                                                        .aria_label(format!(
-                                                            "{} #{} {}",
-                                                            row.repository,
-                                                            row.issue.number,
-                                                            row.issue.title
-                                                        ))
-                                                        .on_click(move |_, _, cx| cx.open_url(&url))
-                                                        .child(
-                                                            div()
-                                                                .text_xs()
-                                                                .text_color(rgb(MUTED))
-                                                                .child(format!(
-                                                                    "{} · #{}",
-                                                                    row.repository,
-                                                                    row.issue.number
-                                                                )),
-                                                        )
-                                                        .child(
-                                                            div()
-                                                                .truncate()
-                                                                .child(row.issue.title.clone()),
-                                                        )
-                                                        .child(
-                                                            div()
-                                                                .text_xs()
-                                                                .text_color(rgb(ACCENT))
-                                                                .truncate()
-                                                                .child(
-                                                                    row.issue.labels.join(" · "),
-                                                                ),
-                                                        )
-                                                })
-                                                .collect()
-                                        },
-                                    ),
-                                )
-                                .w_full()
-                                .flex_1()
-                                .min_h_0()
-                                .into_any_element()
-                            })
-                            .children(self.errors.iter().map(|error| {
-                                div()
-                                    .px_5()
-                                    .py_2()
-                                    .text_color(rgb(0xf2b8a5))
-                                    .child(error.clone())
-                            })),
-                    ),
-            )
-            .child(
-                div()
-                    .id("status")
-                    .role(Role::Status)
-                    .aria_label(self.status.clone())
-                    .px_5()
-                    .py_3()
-                    .flex_none()
-                    .border_t_1()
-                    .border_color(rgb(LINE))
-                    .text_xs()
-                    .text_color(rgb(MUTED))
-                    .child(self.status.clone()),
-            )
+                                    .child(div().flex().items_center().gap_3()
+                                        .child(div().flex_none().text_xs().text_color(rgb(MUTED)).child(format!("#{}", row.issue.number)))
+                                        .child(div().min_w_0().truncate().child(row.issue.title.clone())))
+                                    .child(div().truncate().text_xs().text_color(rgb(MUTED))
+                                        .child(format!("{}  ·  {}", row.repository, row.issue.labels.join(" · "))))
+                            }).collect()
+                        })).track_scroll(&self.issue_scroll).w_full().flex_1().min_h_0().into_any_element()
+                    })
+                    .children(self.errors.iter().map(|error| div().px_5().py_2().text_color(rgb(0xf2b8a5)).child(error.clone())))))
+            .child(div().id("status").role(Role::Status).aria_label(self.status.clone())
+                .px_5().py_2().flex_none().border_t_1().border_color(rgb(LINE)).text_xs().text_color(rgb(MUTED))
+                .flex().justify_between().gap_3()
+                .child(div().flex_1().min_w_0().truncate().child(self.status.clone()))
+                .child(div().flex_none().child("/ Search   ⌘0 All   ⌘1–9 Project   Tab Focus")))
     }
+}
+
+fn shortcut(label: impl Into<gpui::SharedString>) -> impl IntoElement {
+    div()
+        .flex_none()
+        .font_family("Menlo")
+        .text_xs()
+        .text_color(rgb(MUTED))
+        .child(label.into())
 }
 
 pub fn run(runtime: Handle, startup: Startup) {
     gpui_platform::application().run(move |cx: &mut App| {
+        for number in 0..=9 {
+            cx.bind_keys([KeyBinding::new(
+                &format!("cmd-{number}"),
+                SelectProject(number),
+                Some("Nightshift"),
+            )]);
+        }
         cx.bind_keys([
-            KeyBinding::new("enter", ToggleFilter, Some("FilterButton")),
+            KeyBinding::new("enter", Activate, Some("Selectable")),
+            KeyBinding::new("space", Activate, Some("Selectable")),
+            KeyBinding::new("j", NextIssue, Some("Nightshift")),
+            KeyBinding::new("k", PreviousIssue, Some("Nightshift")),
+            KeyBinding::new("enter", OpenIssue, Some("Nightshift")),
+            KeyBinding::new("cmd-f", FocusSearch, Some("Nightshift")),
+            KeyBinding::new("escape", FocusResults, Some("Nightshift")),
+            KeyBinding::new("down", NextIssue, Some("Nightshift")),
+            KeyBinding::new("up", PreviousIssue, Some("Nightshift")),
+            KeyBinding::new("down", FocusResults, Some("TextInput")),
+            KeyBinding::new("up", gpui::NoAction, Some("TextInput")),
+            KeyBinding::new("enter", SearchIssues, Some("TextInput")),
             KeyBinding::new("cmd-q", Quit, None),
             KeyBinding::new("cmd-w", Close, Some("Nightshift")),
             KeyBinding::new("cmd-o", AddProject, Some("Nightshift")),
             KeyBinding::new("cmd-r", SearchIssues, Some("Nightshift")),
+            KeyBinding::new("/", FocusSearch, Some("Nightshift")),
             KeyBinding::new("enter", AddProject, Some("AddButton")),
             KeyBinding::new("enter", SearchIssues, Some("SearchButton")),
+            KeyBinding::new("enter", LoadMore, Some("LoadMoreButton")),
             KeyBinding::new("tab", NextFocus, Some("Nightshift")),
             KeyBinding::new("shift-tab", PreviousFocus, Some("Nightshift")),
         ]);
+        text_input::bind_keys(cx);
         cx.on_action(|_: &Quit, cx| cx.quit());
         cx.on_window_closed(|cx, _| {
             if cx.windows().is_empty() {
