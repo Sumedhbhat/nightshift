@@ -25,6 +25,13 @@ pub struct IssueResults {
     pub error: Option<String>,
 }
 
+#[derive(Default)]
+pub struct IssuePage {
+    pub issues: Vec<Issue>,
+    pub next: Option<String>,
+    pub error: Option<String>,
+}
+
 fn valid_segment(value: &str) -> bool {
     !value.is_empty()
         && value != "."
@@ -161,10 +168,24 @@ impl GitHub {
         })
     }
 
-    async fn get<T: serde::de::DeserializeOwned>(&self, path: &str) -> Result<(T, bool), String> {
+    async fn get<T: serde::de::DeserializeOwned>(
+        &self,
+        target: &str,
+    ) -> Result<(T, Option<String>), String> {
+        let base = reqwest::Url::parse(&format!("{}/", self.base.trim_end_matches('/')))
+            .map_err(|_| "GitHub API configuration is invalid.".to_string())?;
+        let url = base
+            .join(target)
+            .map_err(|_| "GitHub returned an invalid pagination link.".to_string())?;
+        if url.scheme() != base.scheme()
+            || url.host_str() != base.host_str()
+            || url.port_or_known_default() != base.port_or_known_default()
+        {
+            return Err("GitHub returned a pagination link for an unexpected host.".into());
+        }
         let mut response = self
             .client
-            .get(format!("{}{path}", self.base))
+            .get(url)
             .header("Accept", "application/vnd.github+json")
             .header("X-GitHub-Api-Version", "2026-03-10")
             .send()
@@ -173,18 +194,18 @@ impl GitHub {
                 "Could not reach GitHub. Check your connection and try Search issues again."
                     .to_string()
             })?;
-        if !response.status().is_success() {
-            return Err(match response.status().as_u16() {
-                403 | 429 => "GitHub denied the request or its public API rate limit was reached. Wait before trying again.".into(),
-                404 => "Public repository not found. Check the Git remote; private repositories are not supported yet.".into(),
-                status => format!("GitHub returned HTTP {status}. Try again later."),
-            });
-        }
-        let more = response
+        let status = response.status();
+        let next = response
             .headers()
             .get("link")
             .and_then(|v| v.to_str().ok())
-            .is_some_and(|link| link.split(',').any(|part| part.contains("rel=\"next\"")));
+            .and_then(|link| {
+                link.split(',')
+                    .find(|part| part.contains("rel=\"next\""))
+                    .and_then(|part| part.split_once('<'))
+                    .and_then(|(_, rest)| rest.split_once('>'))
+                    .map(|(url, _)| url.to_owned())
+            });
         let mut bytes = Vec::new();
         while let Some(chunk) = response
             .chunk()
@@ -196,9 +217,30 @@ impl GitHub {
             }
             bytes.extend_from_slice(&chunk);
         }
+        if !status.is_success() {
+            #[derive(Deserialize)]
+            struct ApiError {
+                message: Option<String>,
+            }
+            let detail = serde_json::from_slice::<ApiError>(&bytes)
+                .ok()
+                .and_then(|error| error.message)
+                .filter(|message| !message.trim().is_empty())
+                .map(|message| format!(" GitHub says: {message}"))
+                .unwrap_or_default();
+            return Err(match status.as_u16() {
+                403 | 429 => format!(
+                    "GitHub denied the request or its public API rate limit was reached. Wait before trying again.{detail}"
+                ),
+                404 => format!(
+                    "Public repository not found. Check the Git remote; private repositories are not supported yet.{detail}"
+                ),
+                status => format!("GitHub returned HTTP {status}.{detail}"),
+            });
+        }
         let parsed = serde_json::from_slice(&bytes)
             .map_err(|_| "GitHub returned an unreadable response.".to_string())?;
-        Ok((parsed, more))
+        Ok((parsed, next))
     }
 
     pub async fn verify(&self, remote: Remote) -> Result<NewProject, String> {
@@ -219,6 +261,54 @@ impl GitHub {
         })
     }
 
+    pub async fn issue_page(
+        &self,
+        project: &Project,
+        ready_only: bool,
+        cursor: Option<&str>,
+    ) -> IssuePage {
+        let mut result = IssuePage::default();
+        if project.github_host != "github.com"
+            || !valid_segment(&project.owner)
+            || !valid_segment(&project.name)
+        {
+            result.error =
+                Some("This scaffold only supports public github.com repositories.".into());
+            return result;
+        }
+        let target = cursor.map(str::to_owned).unwrap_or_else(|| {
+            let filter = if ready_only {
+                "&labels=ready-for-agent"
+            } else {
+                ""
+            };
+            format!(
+                "/repos/{}/{}/issues?state=open&per_page=10&sort=created&direction=desc{filter}",
+                project.owner, project.name
+            )
+        });
+        match self.get::<Vec<ApiIssue>>(&target).await {
+            Ok((issues, next)) => {
+                result.issues = issues
+                    .into_iter()
+                    .filter(|issue| issue.pull_request.is_none())
+                    .map(|issue| Issue {
+                        number: issue.number,
+                        title: issue.title,
+                        labels: issue.labels.into_iter().map(|label| label.name).collect(),
+                        url: format!(
+                            "https://github.com/{}/{}/issues/{}",
+                            project.owner, project.name, issue.number
+                        ),
+                    })
+                    .collect();
+                result.next = next;
+            }
+            Err(error) => result.error = Some(error),
+        }
+        result
+    }
+
     pub async fn issues(&self, project: &Project, ready_only: bool) -> IssueResults {
         let mut result = IssueResults::default();
         if project.github_host != "github.com"
@@ -229,18 +319,18 @@ impl GitHub {
                 Some("This scaffold only supports public github.com repositories.".into());
             return result;
         }
-        for page in 1..=100 {
-            let filter = if ready_only {
-                "&labels=ready-for-agent"
-            } else {
-                ""
-            };
-            let path = format!(
-                "/repos/{}/{}/issues?state=open&per_page=100&sort=created&direction=desc&page={page}{filter}",
-                project.owner, project.name
-            );
-            match self.get::<Vec<ApiIssue>>(&path).await {
-                Ok((issues, more)) => {
+        let filter = if ready_only {
+            "&labels=ready-for-agent"
+        } else {
+            ""
+        };
+        let mut target = format!(
+            "/repos/{}/{}/issues?state=open&per_page=100&sort=created&direction=desc{filter}",
+            project.owner, project.name
+        );
+        for _ in 0..100 {
+            match self.get::<Vec<ApiIssue>>(&target).await {
+                Ok((issues, next)) => {
                     for issue in issues
                         .into_iter()
                         .filter(|issue| issue.pull_request.is_none())
@@ -262,9 +352,8 @@ impl GitHub {
                             ),
                         });
                     }
-                    if !more {
-                        return result;
-                    }
+                    let Some(next) = next else { return result };
+                    target = next;
                 }
                 Err(error) => {
                     result.error = Some(error);

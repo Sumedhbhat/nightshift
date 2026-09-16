@@ -40,6 +40,46 @@ fn mock(
     (api, server)
 }
 
+fn mock_with_next_link(
+    second_status: &'static str,
+    second_body: &'static str,
+) -> (GitHub, std::thread::JoinHandle<Vec<String>>) {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let next = format!("{base}/page2?after=cursor-token");
+    let server = std::thread::spawn(move || {
+        let mut requests = vec![];
+        for (status, headers, body) in [
+            (
+                "200 OK",
+                format!("Link: <{next}>; rel=\"next\"\r\n"),
+                r#"[{"number":1,"title":"One","labels":[{"name":"ready-for-agent"}]},{"number":2,"title":"PR","labels":[],"pull_request":{}}]"#,
+            ),
+            (second_status, String::new(), second_body),
+        ] {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut request = Vec::new();
+            loop {
+                let mut byte = [0];
+                stream.read_exact(&mut byte).unwrap();
+                request.push(byte[0]);
+                if request.ends_with(b"\r\n\r\n") {
+                    break;
+                }
+            }
+            requests.push(String::from_utf8(request).unwrap());
+            write!(stream, "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n{headers}\r\n{body}", body.len()).unwrap();
+        }
+        requests
+    });
+    let mut api = GitHub::new().unwrap();
+    api.base = base;
+    (api, server)
+}
+
 fn project() -> Project {
     Project {
         id: 1,
@@ -76,18 +116,8 @@ fn github_remote_formats_and_invalid_hosts() {
 #[test]
 fn follows_pages_excludes_prs_and_requests_readiness_filter() {
     run(async {
-        let (api, server) = mock(vec![
-            (
-                "200 OK",
-                "Link: <http://ignored.test/page2>; rel=\"next\"\r\n",
-                r#"[{"number":1,"title":"One","labels":[{"name":"ready-for-agent"}]},{"number":2,"title":"PR","labels":[],"pull_request":{}}]"#,
-            ),
-            (
-                "200 OK",
-                "",
-                r#"[{"number":3,"title":"Three","labels":[]}]"#,
-            ),
-        ]);
+        let (api, server) =
+            mock_with_next_link("200 OK", r#"[{"number":3,"title":"Three","labels":[]}]"#);
         let result = api.issues(&project(), true).await;
         assert!(result.error.is_none());
         assert_eq!(
@@ -96,25 +126,72 @@ fn follows_pages_excludes_prs_and_requests_readiness_filter() {
         );
         let requests = server.join().unwrap();
         assert!(requests[0].contains("labels=ready-for-agent"));
-        assert!(requests[1].contains("page=2"));
+        assert!(requests[1].contains("GET /page2?after=cursor-token HTTP/1.1"));
         assert!(!requests[0].to_lowercase().contains("authorization:"));
+    });
+}
+
+#[test]
+fn issue_page_caps_requests_at_ten_and_returns_the_cursor() {
+    run(async {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let next = format!("{base}/page2?after=cursor-token");
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = Vec::new();
+            loop {
+                let mut byte = [0];
+                stream.read_exact(&mut byte).unwrap();
+                request.push(byte[0]);
+                if request.ends_with(b"\r\n\r\n") {
+                    break;
+                }
+            }
+            let body = r#"[{"number":1,"title":"One","labels":[]},{"number":2,"title":"PR","labels":[],"pull_request":{}}]"#;
+            write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\nLink: <{next}>; rel=\"next\"\r\n\r\n{body}", body.len()).unwrap();
+            String::from_utf8(request).unwrap()
+        });
+        let mut api = GitHub::new().unwrap();
+        api.base = base;
+        let page = api.issue_page(&project(), false, None).await;
+        assert!(page.error.is_none());
+        assert_eq!(
+            page.issues
+                .iter()
+                .map(|issue| issue.number)
+                .collect::<Vec<_>>(),
+            [1]
+        );
+        assert!(page.next.unwrap().contains("after=cursor-token"));
+        let request = server.join().unwrap();
+        assert!(request.contains("per_page=10"));
     });
 }
 
 #[test]
 fn failed_page_keeps_partial_results() {
     run(async {
-        let (api, server) = mock(vec![
-            (
-                "200 OK",
-                "Link: <http://ignored.test/page2>; rel=\"next\"\r\n",
-                r#"[{"number":1,"title":"One","labels":[]}]"#,
-            ),
-            ("403 Forbidden", "", "{}"),
-        ]);
+        let (api, server) = mock_with_next_link("403 Forbidden", "{}");
         let result = api.issues(&project(), false).await;
         assert_eq!(result.issues.len(), 1);
         assert!(result.error.unwrap().contains("rate limit"));
+        server.join().unwrap();
+    });
+}
+
+#[test]
+fn reports_github_validation_message() {
+    run(async {
+        let (api, server) = mock(vec![(
+            "422 Unprocessable Content",
+            "",
+            r#"{"message":"Use cursor based pagination"}"#,
+        )]);
+        let result = api.issues(&project(), false).await;
+        let error = result.error.unwrap();
+        assert!(error.contains("HTTP 422"));
+        assert!(error.contains("Use cursor based pagination"));
         server.join().unwrap();
     });
 }
