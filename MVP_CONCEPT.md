@@ -8,18 +8,28 @@ The MVP uses independent execution branches and pull requests targeting the repo
 
 ## Current scaffold
 
-The initial usable scaffold lets the owner add local repositories and fetch open issues from public GitHub repositories. That public-only restriction belongs to the anonymous scaffold and will be removed by the authenticated GitHub CLI integration. The target accepts a repository when the active account can access it. Issue browsing defaults to assigned open issues and offers a `ready-for-agent` filter. This browsing mode does not authorize execution or relax the run readiness rules below. Execution controls are not implemented yet.
+The initial usable scaffold lets the owner add local repositories and fetch open issues from public GitHub repositories. It fetches up to ten results for the selected project at a time and provides a search field with GitHub-style qualifiers, including `label:ready-for-agent`. **Load more** follows GitHub pagination for that project. **All projects** combines results already fetched during the current session; it does not start a broader request. This browsing mode does not authorize execution or relax the run readiness rules below. Execution controls are not implemented yet.
+
+The public-only restriction belongs to the anonymous scaffold and will be removed by the authenticated GitHub CLI integration. The target accepts a repository when the active account can access it and limits execution candidates to issues assigned to that account.
 
 ## Workflow
 
 1. Add a project by selecting an existing, initialized local repository. Identify its GitHub repository from its Git remote.
-2. Click **Search issues** to list open issues assigned to the active GitHub CLI account across all added projects, with an optional `ready-for-agent` filter.
+2. Select a project and refresh its open issues. The first request is capped at ten results; use **Load more** when more are available. Filter the fetched results with `label:ready-for-agent` when reviewing execution candidates.
 3. **Checking.** The owner starts a run over open issues assigned to the active GitHub CLI account and labeled `ready-for-agent` across added projects. Persist the candidate's checking state and verify every start-eligibility gate. Do not advance when any check fails.
 4. **Working.** After checking succeeds and capacity is reserved, save the immutable issue and parent snapshots, fetch the latest GitHub default branch, create the dedicated worktree and branch from that fetched commit, run optional setup, and start Codex. Keep the execution in this step until local work reaches its terminal successful result; GitHub changes do not interrupt it.
 5. **Branch published.** After local work finishes, verify the sole publication gate: the issue remains open. Push the recorded branch through the selected remote and save evidence of the exact remote branch before advancing. A closed issue preserves the local result and ends without publication.
 6. **Pull request published.** Only after branch publication is recorded, create or recover the pull request for that exact branch targeting the repository's default branch and save its stable identity and URL before advancing.
 7. Show the current workflow step, evidence, output, and errors. A failed check or operation remains at its current step. An explicit owner retry reruns only the incomplete transition; completed steps never run again.
 8. Keep blocked issues under observation during an active run. When GitHub reports blocker A closed, reevaluate dependent issue B and start it only if every other eligibility rule also passes.
+
+## Keyboard interface
+
+All app workflows must be usable with the keyboard, with visible shortcut hints and focus indicators. ⌘1 through ⌘9 select projects in sidebar order; ⌘0 selects All projects. Projects beyond the ninth remain reachable through keyboard focus.
+
+The issue search field combines text and filters. `/` or ⌘F focuses the field. Ordinary typing, selection, and clipboard editing use standard text input, without Vim modes. Search applies to fetched open issues across added projects, narrowed by the selected sidebar project. Title text and GitHub-style qualifiers such as `label:ready-for-agent`, `-label:bug`, `repo:owner/name`, and quoted label names can be combined. Show unsupported or incomplete filters explicitly rather than silently ignoring them. Enter in search or ⌘R refreshes only the selected project and fetches its first page; **Load more** fetches its next page. Esc moves focus to results without clearing the query. Arrow keys and `j`/`k` browse results outside the field, and Enter opens an issue. Tab and Shift-Tab reach other controls.
+
+This is a local search over fetched open issues, not a GitHub-wide search or an implementation of every GitHub qualifier. It does not expand execution eligibility.
 
 ## Rules
 
