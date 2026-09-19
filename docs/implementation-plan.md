@@ -4,36 +4,59 @@
 
 Use Zed's native Rust UI architecture to build a responsive macOS application for the workflow in [MVP_CONCEPT.md](../MVP_CONCEPT.md). Zed is the reference for how the UI is written and how work stays off the UI thread. Nightshift's visual design is independent.
 
-The MVP now includes unattended dependent work and stacked PR creation. The manual execution sequence and milestones below describe the earlier baseline, not the complete current scope. They must be revised after the stack gate, review phases, parent completion semantics, and failure rules are settled. In particular, the earlier rules requiring every dependency to be closed, every branch to start from the default branch, and completion never to start another execution are superseded for authorized stack progression.
+The MVP now includes unattended dependent work and independent PR creation. The manual execution sequence and milestones below describe the earlier baseline, not the complete current scope. They must be revised after the review phases and failure rules are settled. Explicit dependencies require their blockers to close before dependent work starts. Closing a parent removes its child pile from the candidate workload.
+
+Execution start is the remote-state boundary. Start eligibility validates every required GitHub and local gate immediately before reservation and local launch. After launch, no GitHub state change, authentication failure, access loss, missing issue, or rate limit interrupts local execution. Retain local results when remote operations fail.
+
+After local work finishes, publication eligibility checks one workflow condition only: the issue remains open. Do not reapply assignment, readiness, parent, or dependency gates. A closed issue skips branch push and pull-request creation while retaining the local branch, worktree, output, and audit reason. Do not alter a pull request already opened before closure.
+
+If open-state verification or either publication step fails, stop the publication attempt and persist the error. Do not retry through timers, active-run discovery, or later issue refreshes. Preserve the local result and expose an explicit owner-requested publication recheck.
+
+Implement publication recheck as a per-execution action. Reverify open state, stop on closed or unverifiable state, and otherwise resume incomplete publication. Keep ordinary issue refresh free of branch pushes and pull-request creation.
+
+Only explicit owner shutdown or a terminal local process condition can stop active work. Setup failure, Codex exit, owned-process crash, and operating-system or machine shutdown are local terminal conditions; GitHub failures are not.
+
+Use one persisted monotonic workflow for the full lifecycle: `checking` → `working` → `branch_published` → `pull_request_published`. A transition validates its guard, performs only that step's side effect, and commits the new state, evidence, and audit event atomically. Failure records the error without advancing. An explicit owner retry resumes the incomplete transition; it must inspect saved evidence and remote state, never replay a completed transition or skip a prerequisite.
+
+Define a static policy for every workflow step, including `consumes_execution_slot: bool`. The orchestrator, not individual step handlers, owns capacity changes. Before entering a consuming step, atomically reserve capacity with the state transition; if capacity is unavailable, retain the prior completed step and wait. Keep the reservation across adjacent consuming steps. Release it only after leaving the final consuming step and confirming any owned local process has stopped. Checking and publication steps are non-consuming; working consumes one slot. Tests must derive expected reservation behavior from step policies so future steps cannot omit the declaration or bypass the orchestrator.
+
+Keep the workflow graph and step policies compile-time typed for the MVP. Persist current state and evidence, not editable step definitions. Settings may change the concurrency limit but cannot change a step's capacity policy.
+
+Model recoverable failure orthogonally to workflow position. Persist the current step, attempted transition, structured error, evidence already obtained, and whether owner retry is available. Do not move to a generic `failed` workflow state. On explicit retry, rerun only that transition and atomically clear the error when saving success. Reserve terminal states for interruption or unrecoverable local process outcomes.
+
+The existing storage enum (`preparing`, `running`, `interrupted`, `failed`) is foundation state and cannot express this target workflow. Add a forward SQLite migration and update the domain model rather than overloading the existing values. Preserve immutable issue snapshots and the audit history through migration.
 
 The [public issue discovery scaffold](public-issue-discovery.md) now supports adding local projects and fetching public GitHub issues. It does not implement run eligibility or execution.
 
-## Stacked PR design work
+## Independent execution and dependency rules
 
-For a linear dependency A then B, A's PR targets the default branch and B's PR targets A's branch. B starts after A finishes and builds on A's changes without waiting for A to merge. Detailed completion criteria and review phases are deferred; do not add a specific review or PR-publication gate to successor startup until it is agreed. Preserve the distinction between GitHub issue resolution and permission to build on an unmerged predecessor. Human review and merge remain outside automation. See GitHub's [stacked PR overview](https://docs.github.com/en/pull-requests/get-started/about-stacked-prs).
+For an explicit GitHub dependency A then B, B waits until GitHub reports A closed. The team closes implemented issues after merging their pull requests. Nightshift uses closure as the dependency signal. Each execution fetches the latest default branch, starts its own branch from that commit, and targets its PR at the default branch. Human review and merging remain manual. PR stacking and `gh stack` are outside the MVP.
 
 Remaining design questions, with detailed completion criteria and review phases deferred for now:
 
-- The checks and automated review phases that permit a successor to start, and evidence tied to the predecessor commit that passed them.
-- Refresh cadence for automatic discovery during active runs. Newly labeled open issues across added projects join the workload automatically.
-- Whether readiness checks extend beyond the direct parent, and the precise completion and closure rules for parents.
-- Ordering eligible children within a parent stack, and handling dependencies on multiple unmerged parent stacks or across repositories.
+- The checks and automated review phases that establish successful local work before publication.
+- Whether readiness checks extend beyond the direct parent, and who closes an open parent after its children finish.
 - Review-fix limits and what happens when checks, review, push, or PR creation fail.
-- What happens to descendants when a predecessor changes or merges.
 
 Before each start, re-read the issue's own `ready-for-agent` label and query its GitHub parent relationship. When a parent exists, verify that it also has `ready-for-agent`. A failed parent lookup or unreadable parent cannot establish eligibility. This is a readiness check, separate from explicit dependency evaluation; it does not require the parent to finish. Validate standalone issues, both labels present, either label missing, and inaccessible parents.
 
 Exclude parent issues from execution candidates even when labeled. Fetch and snapshot parent context with the child's start-time description, and supply both to Codex with their roles distinguished. A parent does not get a separate execution or branch.
 
-Evaluate the union of the child's explicit blockers and its parent's explicit blockers. Preserve whether each blocker is direct or inherited so the UI can explain why a child cannot start. If P is blocked by Q and both are parents, all Q children must finish before any P child can start. Sharing a parent does not create an explicit dependency, but children execute sequentially for stacking. Validate direct blockers, inherited blockers, a parent blocker with one unfinished child, and a parent blocker whose children have all finished.
+Evaluate the union of the child's explicit blockers and its open parent's explicit blockers. Preserve whether each blocker is direct or inherited so the UI can explain why a child cannot start. If P is blocked by Q, P's children wait until Q closes; Q's child states do not alter that dependency gate. Sharing a parent creates neither an explicit dependency nor a serialization requirement. Exclude every unstarted child whose parent is closed.
 
-Maintain one sequential stack per parent and atomically reserve both a global execution slot and that parent's active-child slot. Select children in an order that respects explicit dependencies; the tie-break between otherwise eligible children is undecided. Create each subsequent child's worktree from the preceding child's recorded branch commit, and target its PR at the preceding branch. The final branch accumulates the children's changes. Do not run siblings in parallel or add a branch-combination stage for them. Independent parent stacks may progress concurrently. Validate competing starts within one parent and simultaneous starts across different parents.
+Apply the active-account assignment gate only to executable children. A parent may remain assigned to a different team member; its state, readiness label, context, and inherited dependencies still participate in child eligibility.
 
-For a same-repository dependency P on Q, Q's final child branch supplies the accumulated prerequisite changes when P starts before Q merges. Dependencies on multiple unrelated unmerged parent stacks, and dependencies across repositories, still require a design decision.
+Treat multiple assignees as independent accountable owners. Membership of the active account in the assignee set is sufficient; do not require sole assignment or extra approval. Different owners may produce competing pull requests for the same issue. Issue closure prevents new starts but remains non-terminal for active local work.
 
-When an explicit blocker is a parent issue, evaluate all its children instead of relying on the parent's label or closed state alone. Fetch the complete child list; incomplete or inaccessible results cannot establish completion. The distinction between children finished for stacked progression and children completed for GitHub parent closure still needs a decision. Parent closure is permitted only after all children complete; automatic versus manual closure is undecided.
+Check readiness from current label presence only. Do not fetch label-event history or require the run owner to have applied the label.
 
-Do not select a stacking tool or assume automatic rebasing yet. Verify the chosen GitHub mechanism during implementation. A configurable global concurrency limit replaces the fixed limit of two. Stop-on-quit behavior and the lack of interrupted-execution continuation remain in force.
+Reserve global execution capacity and prevent duplicate active work on the same issue. Eligible siblings may execute concurrently. Do not reserve a parent-wide slot or build on another execution's branch. The current storage schema still enforces a parent-wide slot; remove that constraint in a forward migration and update its tests before claiming this workflow is implemented.
+
+For a same-repository dependency P on Q, do not start P while Q remains open. Reevaluate P after GitHub reports Q closed. Dependencies across repositories follow the same closure gate.
+
+When an explicit blocker is a parent issue, rely on that parent's GitHub state for dependency resolution. A closed parent resolves the dependency regardless of open children, while its own remaining children become ineligible for new execution. An active child execution continues; Nightshift does not close or detach any children. Automatic versus manual closure of an open parent after its children finish remains undecided.
+
+Use ordinary Git branches and independent pull requests. Do not add automatic rebasing or branch-chain management. The concurrency limit is configurable. Stop-on-quit remains in force; interrupted work may continue only through explicit owner retry.
 
 The native foundation and local persistence implementation have started. See [foundation-implementation.md](foundation-implementation.md) for build and replay validation, and [storage-implementation.md](storage-implementation.md) for implemented storage rules and remaining work. The service boundaries, storage design, and performance budgets below remain proposed implementation decisions unless recorded there. Product scope remains in the MVP; domain terms remain in [CONTEXT.md](../CONTEXT.md).
 
@@ -114,7 +137,7 @@ Store per-project setup configuration with the project. Persist the global concu
 5. **Prepare the worktree.** Discover the GitHub default branch, fetch it from the selected remote, and record the fetched commit. Create a unique branch and dedicated worktree from that commit. Use argument arrays for Git subprocesses. Keep generated paths outside the owner's checkout. Do not switch or reset the owner's branch. Run the optional setup command in the new worktree and capture its output; a setup failure prevents Codex launch.
 6. **Run and observe.** Start Codex in the worktree using the saved description. Translate process and protocol events into persisted execution status and output. Finishing only updates this execution.
 
-For each explicit blocker, require GitHub issue state `closed` and state reason `completed`. An open blocker, another closure reason, an absent or unknown reason, or an unreadable blocker prevents the start. Show the blocking issue and reason when available. Do not substitute a local execution outcome for GitHub issue completion or repair dependencies automatically; the owner corrects relationships in GitHub.
+For each explicit blocker, require GitHub issue state `closed`; the state reason does not affect eligibility. An open or unreadable blocker prevents the start. Show the blocking issue and closure reason when available. Do not substitute a local execution outcome for GitHub closure or repair dependencies automatically; the owner corrects relationships in GitHub.
 
 Git worktrees isolate ordinary working files, but share repository metadata. Worktree selection is not a sandbox. The runtime policy must preserve the MVP requirement that agent changes stay separate from the owner's checkout.
 
@@ -124,7 +147,7 @@ Adapt only the process and protocol portions of the sibling T3 Code implementati
 
 Codex owns its stored conversation threads and agent work. Nightshift owns the issue execution record and the local app-server process it launches. A stored thread can outlive that process; reopening it with `thread/resume` is distinct from keeping an in-progress turn running through an application crash.
 
-The MVP does not expose manual continuation of interrupted executions or automatically resume their Codex threads. On reopening Nightshift, load their saved execution details and output for inspection. Retain thread IDs for correlation without adding a resume action.
+On reopening Nightshift, load interrupted execution details and output for inspection and expose **Retry working**. Explicit retry continues the same execution using its saved worktree, branch, immutable snapshots, and continuation evidence. Confirm old-process termination and acquire capacity through the orchestrator before launching continuation. Preserve previous attempts and output. If continuation is unavailable, record an error at the working step rather than silently starting over. Validate runtime continuation behavior before implementation; never resume automatically.
 
 The sibling T3 Code runtime confirms this separation: `makeCodexSessionRuntime` spawns a scoped child with a force-kill timeout, watches its exit code, and closes the runtime scope when stopping a session. `openCodexThread` separately starts or resumes a Codex thread using its saved ID. `CodexAdapter` closes its sessions during adapter teardown. Use these as lifecycle implementation references. They do not establish behavior after an uncatchable application crash; test that with the selected Codex runtime before designing additional process supervision.
 
@@ -159,20 +182,26 @@ Use release builds on a named reference Mac. Record hardware, macOS, display ref
 
 Use Instruments Time Profiler and Allocations to diagnose stalls and memory growth. Instrument command receipt, persistence, UI event delivery, and rendering. Separate network completion time from immediate UI feedback. Compare equivalent launch and navigation measurements with Zed on the same machine if a relative comparison is useful; do not compare a Nightshift issue list with a Zed indexing workload.
 
-## Earlier implementation milestones, pending stack revision
+## Implementation milestones, pending orchestration revision
 
 1. **Prove the GPUI foundation.** Create the Rust package, pin compatible dependencies, and render a native macOS window with text, focus, actions, and a virtualized list. Replay two synthetic output streams off the UI thread. Measure startup, frames, and memory before adding external integration. Exit when the build is reproducible without sibling checkouts and the UI remains responsive.
 2. **Persist projects and execution records.** Add migrations, the storage worker, coordinator, and state rules. Test simultaneous starts up to the configured limit, rejection of additional starts, duplicates across checkouts, failed transactions, and saved-description immutability.
-3. **Implement manual issue discovery.** Add repository identification, authenticated GitHub access, pagination, and readiness validation. Verify missing labels, open blockers, blockers closed as completed, blockers closed for other reasons, unknown closure reasons, inaccessible dependencies, partial search failures, and stale-result handling. Confirm a completed local execution cannot satisfy an unresolved GitHub dependency.
+3. **Implement manual issue discovery.** Add repository identification, authenticated GitHub access, pagination, and readiness validation. List only open issues assigned to the active account as candidates; fetch closed issues only for parent or dependency evaluation. Verify missing labels, open blockers, blockers with each supported closure reason, absent closure reasons, inaccessible dependencies, partial search failures, and stale-result handling. Confirm a completed local execution cannot satisfy an open GitHub dependency.
 4. **Prepare isolated worktrees.** Use temporary Git repositories to verify default-branch fetches, unique branch/path creation, setup failure, and an unchanged original checkout. Record partial failures without automatic cleanup.
 5. **Integrate Codex.** Test a fake stdio server for handshake, out-of-order responses, output bursts, terminal statuses, unsupported requests, and abrupt exit. Then validate one owner-started execution using the real installed runtime. Resolve runtime permissions and process shutdown before this step.
 6. **Validate the complete workflow.** Run executions across projects up to the configured limit, verify additional and duplicate starts are blocked, and confirm completion never triggers another search or execution. Re-run the defined performance scenarios and document results.
 
-The native foundation now has build and test commands in [AGENTS.md](../AGENTS.md). Milestone 1 remains open until its performance validation is complete. Later milestones still require revision for the current stacked-PR scope.
+The native foundation now has build and test commands in [AGENTS.md](../AGENTS.md). Milestone 1 remains open until its performance validation is complete. Later milestones still require revision for the current orchestration scope.
 
 ## Decisions to settle during implementation
 
-- GitHub authentication adapter. Dependency relationships come from GitHub's "blocked by" API and require blockers closed as completed; verify access against the repositories in use.
+- GitHub CLI adapter. Require an installed and already authenticated `gh`, consume structured command output without extracting its token, and provide no anonymous fallback. Report missing installation or authentication as a blocking prerequisite; do not install the CLI or launch its login flow. Probe the required commands and structured fields instead of relying only on a version threshold, and reject incompatible installations with an update instruction. Dependency relationships come from GitHub's "blocked by" API and require blockers to be closed; verify access against the repositories in use.
+- Owner-managed Git credentials. Do not run `gh auth setup-git` or change Git credential configuration. Push through the selected remote's existing SSH or HTTPS setup and preserve completed local branches when publication fails.
+- Non-destructive push preflight. Verify the selected remote can accept a non-interactive push before reservation. Block new work for that project on failure without consuming a slot or affecting active executions.
+- Direct-push publication only. Do not create or discover forks or support cross-repository pull-request heads in the MVP; a read-only selected repository is ineligible for new execution.
+- Authenticated repository admission. Allow public and private repositories that the active account can access, while retaining explicit project enrollment and rejecting inaccessible repositories.
+- Remote-state boundary enforcement. Prevent new starts when authentication, access, issue state, or eligibility cannot be verified, while allowing active local work to finish and preserving unpublished branches and errors without account switching or silent write retries.
+- Run-owner identity pinning. Capture the active GitHub CLI account at run start, recheck it before each new execution, and block new starts after logout or account switching without interrupting active executions.
 - A compatible pinned GPUI revision, Rust toolchain, and whether the Tokio bridge is a direct dependency or a small local adapter.
 - Codex sandbox and approval policy, unsupported input requests, crash process ownership, and the mechanism for enforcing stop-on-quit.
 - Exact output queue/cache limits and timeout values, based on the replay measurements.
