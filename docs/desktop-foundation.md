@@ -4,7 +4,7 @@ Nightshift should follow Zed's native Rust UI architecture and approach to respo
 
 The first native foundation implementation is in progress. See [foundation-implementation.md](foundation-implementation.md) for its current behavior, pinned dependencies, and validation.
 
-The MVP now includes unattended progression through dependent issues and stacked PR creation. The implementation plan identifies the stack decisions still being defined and marks its earlier manual milestones as a baseline pending revision.
+The MVP includes unattended progression through dependent issues and independent PR creation. Every execution starts from the latest fetched default branch and opens a PR against that branch. The implementation plan records the orchestration work still required.
 
 ## Architecture direction
 

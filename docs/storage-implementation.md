@@ -12,15 +12,23 @@ The worker serializes requests through a 32-message channel. SQLite uses foreign
 
 ## Reservation and state rules
 
-The coordinator requires an explicit nonzero concurrency limit. It has no default, Settings UI, or live reconfiguration policy yet. Reservation is only a local capacity operation. Future run orchestration must establish owner authorization, readiness, dependency eligibility, and parent-stack branch selection before calling it.
+The coordinator requires an explicit nonzero concurrency limit. It has no default, Settings UI, or live reconfiguration policy yet. Reservation is only a local capacity operation. Future run orchestration must establish owner authorization, readiness, dependency eligibility, and default-branch selection before calling it.
 
-Each reservation uses `BEGIN IMMEDIATE` to check capacity and insert the execution plus its first audit event. Partial unique indexes protect the issue and parent slots across local checkouts, using GitHub host plus stable issue identity. Independent parents share the global capacity limit; siblings share a single parent slot. Transactional checks also hold when tested through separate SQLite connections.
+Each reservation uses `BEGIN IMMEDIATE` to check capacity and insert the execution plus its first audit event. Partial unique indexes protect the issue and parent slots across local checkouts, using GitHub host plus stable issue identity. The current implementation limits siblings to a single parent slot. That restriction is obsolete under the independent-PR plan: a forward migration must remove it while preserving global capacity and duplicate-issue protection. Until then, storage does not match the target concurrency behavior. Transactional checks also hold when tested through separate SQLite connections.
 
 Saved child and parent descriptions, titles, identities, and creation times are immutable. A database trigger rejects attempts to update them. Each state change and its audit event commit together, with UTC timestamps and per-execution sequences.
 
 Supported changes currently cover preparation, running, interruption, confirmed failure, and termination confirmation. Interrupted executions retain capacity until owned work is confirmed stopped. They cannot transition back to running. Failure releases capacity only when the caller confirms failure and termination together. Late state changes and output after termination confirmation are rejected.
 
+The planned **Retry working** action supersedes the current prohibition on interrupted continuation. The future migration must preserve attempt history, confirm old-process termination, and reserve capacity before a continuation attempt. Completed attempts remain immutable; reopening the app does not resume work automatically.
+
 There is intentionally no successful-completion operation yet. Passing checks, automated review, successor eligibility, and PR publication still need the decisions listed in the MVP. Free capacity alone does not make another issue eligible.
+
+The target workflow is now an ordered persisted state machine: checking, working, branch published, and pull request published. The current schema does not implement those states. A later forward migration must store each transition's evidence and error atomically with its audit event, leave failures at the incomplete step, and let an explicit owner retry resume only that step.
+
+Each target workflow step has explicit orchestration metadata declaring whether it consumes an execution slot. The orchestrator acquires capacity atomically when entering a consuming step, carries it across adjacent consuming steps, and releases it only after safely leaving the last one. Checking and publication do not consume capacity; working does. Future steps must declare the policy rather than modifying reservation logic directly.
+
+Recoverable errors attach to the current workflow step with the attempted transition and retained evidence. They do not advance to a generic failure state. An explicit owner retry resumes that transition; success clears the error atomically with the next state and audit event. Terminal local outcomes remain separate.
 
 ## Output and limits
 

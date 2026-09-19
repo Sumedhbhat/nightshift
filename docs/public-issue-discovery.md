@@ -18,6 +18,12 @@ Initial limits are 20 seconds per HTTP request, 8 MiB per response page, and 100
 
 This scaffold does not evaluate parents or dependencies and does not claim that displayed issues are eligible for execution. Project setup commands, authentication, execution controls, and PR creation are still absent.
 
+## Planned authenticated replacement
+
+The anonymous HTTP client is historical scaffold behavior, not the target integration. Replace it with a GitHub CLI adapter that requires `gh` to be installed and already authenticated, uses the active account for repository verification and issue discovery, and never falls back to anonymous requests. The adapter must consume structured command output without extracting or storing the CLI's token. GitHub CLI installation and login remain outside Nightshift; the app reports a blocking prerequisite error when either is unavailable. It also validates the required commands and structured fields directly, rather than trusting a version threshold, and asks the owner to update an incompatible CLI. This moves request accounting to the user's authenticated GitHub identity and raises the normal REST primary limit from 60 unauthenticated requests per hour to the authenticated user's applicable limit.
+
+The replacement removes the scaffold's public-only project restriction. A public or private repository is eligible to be added when the active account can access it. Repositories remain explicitly enrolled through the project workflow rather than imported from the account automatically.
+
 ## Verification
 
 Tests cover accepted remote formats, invalid hosts and paths, initialized checkout validation, remote deduplication and selection, public metadata, private-repository rejection, paginated results, pull-request exclusion, readiness filtering, and retained results on a failed page. Storage tests also verify that projects reload after reopening.
