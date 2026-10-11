@@ -1,5 +1,7 @@
 # Nightshift terminology
 
+**Primary shortcut modifier**: The platform-appropriate modifier used for common application shortcuts: Command on macOS and Control on Linux and Windows. The UI displays the matching key label.
+
 **Project**: An existing local repository added to Nightshift, corresponding to one GitHub repository.
 
 **Execution**: Codex work on one issue within the owner's authorized scope, tracked locally with its own worktree and status history. Once local work starts, changes or failures in GitHub state do not interrupt it; only explicit owner shutdown or a terminal local process condition can stop it.

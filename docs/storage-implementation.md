@@ -4,7 +4,7 @@ This implements the storage and reservation portion of milestone 2 in the [imple
 
 ## Ownership and startup
 
-`Store` opens `nightshift.sqlite3` on a dedicated named thread. Startup creates the application data directory under `~/Library/Application Support/Nightshift`, acquires an OS file lock on `nightshift.lock`, and applies the schema migration. A second worker for the same directory returns an explicit error. File existence alone is not the lock; the OS releases ownership when the file handle closes or the process exits.
+`Store` opens `nightshift.sqlite3` on a dedicated named thread. Startup resolves the per-user application data directory through the platform abstraction (or the exact directory supplied by `NIGHTSHIFT_DATA_DIR`), acquires an OS file lock on `nightshift.lock`, and applies the schema migration. A second worker for the same directory returns an explicit error. File existence alone is not the lock; the OS releases ownership when the file handle closes or the process exits.
 
 The window opens without awaiting SQLite. A one-shot result updates the footer with history counts or an error. The application owns initialization and waits for it during shutdown, including an immediate quit. It then drains earlier storage commands and closes the database before shutting down Tokio. Synthetic replay data never enters persistent history.
 

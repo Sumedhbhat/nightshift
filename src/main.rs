@@ -1,6 +1,6 @@
 mod ui;
 
-use nightshift::storage::{Error, Store};
+use nightshift::{platform::Platform, storage::Store};
 use std::sync::{Arc, OnceLock};
 
 fn main() {
@@ -14,13 +14,7 @@ fn main() {
     let (startup_sender, startup_receiver) = tokio::sync::oneshot::channel();
     let startup = runtime.spawn(async move {
         let result = async {
-            let home =
-                std::env::var_os("HOME").ok_or(Error::InvalidInput("HOME is unavailable"))?;
-            let directory = std::env::var_os("NIGHTSHIFT_DATA_DIR")
-                .map(std::path::PathBuf::from)
-                .unwrap_or_else(|| {
-                    std::path::PathBuf::from(home).join("Library/Application Support/Nightshift")
-                });
+            let directory = Platform::current().data_directory()?;
             let store = Store::open(directory).await?;
             let projects = store.projects().await?;
             let _ = startup_store.set(store.clone());
