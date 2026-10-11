@@ -15,7 +15,11 @@ fn run(test: impl Future<Output = ()>) {
 
 fn project(path: &str) -> NewProject {
     NewProject {
-        checkout_path: path.into(),
+        checkout_path: std::env::temp_dir()
+            .join("nightshift-test-checkouts")
+            .join(path.trim_matches('/'))
+            .to_string_lossy()
+            .into_owned(),
         github_host: "github.com".into(),
         repository_id: "R_1".into(),
         owner: "owner".into(),
