@@ -2,7 +2,7 @@
 
 ## Intent and status
 
-Use Zed's native Rust UI architecture to build a responsive macOS application for the workflow in [MVP_CONCEPT.md](../MVP_CONCEPT.md). Zed is the reference for how the UI is written and how work stays off the UI thread. Nightshift's visual design is independent.
+Use Zed's native Rust UI architecture to build one responsive cross-platform desktop application for the workflow in [MVP_CONCEPT.md](../MVP_CONCEPT.md). Zed is the reference for how the UI is written and how work stays off the UI thread. Nightshift's visual design is independent.
 
 The MVP now includes unattended dependent work and independent PR creation. The manual execution sequence and milestones below describe the earlier baseline, not the complete current scope. They must be revised after the review phases and failure rules are settled. Explicit dependencies require their blockers to close before dependent work starts. Closing a parent removes its child pile from the candidate workload.
 
@@ -64,7 +64,7 @@ The native foundation and local persistence implementation have started. See [fo
 
 | Zed pattern | Nightshift application |
 | --- | --- |
-| GPUI application and native platform backend | One macOS application with GPU rendering through Metal |
+| GPUI application and native platform backend | One shared application with a native backend per supported operating system |
 | Entities and views implementing `Render` | Small views for projects, issue results, and execution details |
 | Actions and focus handling | Buttons and keyboard bindings call the same application commands |
 | Foreground UI work separated from asynchronous work | Render immediately while Git, GitHub, storage, and Codex work runs elsewhere |
@@ -111,7 +111,7 @@ These are architectural constraints. They are not evidence that Nightshift alrea
 
 ## Storage proposal
 
-Use SQLite through `rusqlite`, with schema migrations, foreign keys, and serialized writes. Store application data under `~/Library/Application Support/Nightshift/`.
+Use SQLite through `rusqlite`, with schema migrations, foreign keys, and serialized writes. Resolve the platform's standard per-user data directory through the platform abstraction; allow `NIGHTSHIFT_DATA_DIR` to override it for testing.
 
 | Table | Main fields and purpose |
 | --- | --- |
@@ -184,7 +184,7 @@ Use Instruments Time Profiler and Allocations to diagnose stalls and memory grow
 
 ## Implementation milestones, pending orchestration revision
 
-1. **Prove the GPUI foundation.** Create the Rust package, pin compatible dependencies, and render a native macOS window with text, focus, actions, and a virtualized list. Replay two synthetic output streams off the UI thread. Measure startup, frames, and memory before adding external integration. Exit when the build is reproducible without sibling checkouts and the UI remains responsive.
+1. **Prove the GPUI foundation.** Create the Rust package, pin compatible dependencies, and render a native window with text, focus, actions, and a virtualized list on macOS, Linux, and Windows. Replay two synthetic output streams off the UI thread. Measure startup, frames, and memory before adding external integration. Exit when each target builds reproducibly without sibling checkouts and the UI remains responsive.
 2. **Persist projects and execution records.** Add migrations, the storage worker, coordinator, and state rules. Test simultaneous starts up to the configured limit, rejection of additional starts, duplicates across checkouts, failed transactions, and saved-description immutability.
 3. **Implement manual issue discovery.** Add repository identification, authenticated GitHub access, pagination, and readiness validation. List only open issues assigned to the active account as candidates; fetch closed issues only for parent or dependency evaluation. Verify missing labels, open blockers, blockers with each supported closure reason, absent closure reasons, inaccessible dependencies, partial search failures, and stale-result handling. Confirm a completed local execution cannot satisfy an open GitHub dependency.
 4. **Prepare isolated worktrees.** Use temporary Git repositories to verify default-branch fetches, unique branch/path creation, setup failure, and an unchanged original checkout. Record partial failures without automatic cleanup.

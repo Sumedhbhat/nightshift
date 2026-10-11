@@ -10,11 +10,11 @@ The GitHub repository endpoint verifies public access and supplies stable reposi
 
 ## Keyboard controls
 
-- `/` or ⌘F focuses the search field. Search has ordinary text editing, selection, copy, cut, and paste, with no Vim modes. Typing `/`, `j`, or `k` inside it inserts text.
-- Enter in search or ⌘R refreshes the selected project's first ten GitHub results. **Load more** fetches that project's next page. Esc or Down from search focuses results without clearing the query.
+- `/` or the primary modifier with F focuses the search field. Search has ordinary text editing, selection, copy, cut, and paste, with no Vim modes. Typing `/`, `j`, or `k` inside it inserts text.
+- Enter in search or the primary modifier with R refreshes the selected project's first ten GitHub results. **Load more** fetches that project's next page. Esc or Down from search focuses results without clearing the query.
 - Up/Down or `j`/`k` browse matching results and scroll the selection into view. Enter opens the selected issue on GitHub.
-- ⌘1–⌘9 select the first nine projects in sidebar order, preserving the search query. Each row shows its shortcut suffix. ⌘0 shows All projects. An unassigned number does nothing.
-- ⌘O adds a project. Tab and Shift-Tab move focus. Enter activates a focused control; Space also activates project, remote, and issue rows. The folder picker uses standard macOS keyboard controls.
+- The primary modifier with 1–9 selects the first nine projects in sidebar order, preserving the search query. Each row shows its shortcut suffix. The primary modifier with 0 shows All projects. An unassigned number does nothing.
+- The primary modifier with O adds a project. Tab and Shift-Tab move focus. Enter activates a focused control; Space also activates project, remote, and issue rows. The folder picker follows native controls for the current platform.
 
 ## Issue search
 

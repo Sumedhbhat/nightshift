@@ -1,16 +1,16 @@
 # Nightshift
 
-A native macOS scaffold for adding local projects and fetching issues from public GitHub repositories.
+A native desktop scaffold for adding local projects and fetching issues from public GitHub repositories. CI is configured to check builds on macOS, Linux, and Windows; release packaging is not yet implemented for distribution.
 
 ## Run
 
-Requires macOS, Xcode's macOS toolchain, and Rust through rustup. Rust and GPUI are pinned; Cargo fetches the dependencies without needing sibling checkouts.
+Requires Rust through rustup and the native build prerequisites for the selected platform. Rust and GPUI are pinned; Cargo fetches the dependencies without needing sibling checkouts.
 
 ```sh
 cargo run --locked
 ```
 
-Or build a local app bundle:
+On macOS, build a local app bundle:
 
 ```sh
 sh scripts/bundle.sh --release
@@ -27,7 +27,7 @@ open target/release/Nightshift.app
 
 Projects persist between launches. Issue results are fetched when you search. Public access needs no sign-in; GitHub's unauthenticated API rate limits apply, and failures appear in the window. Private repositories, Codex execution, worktrees, and pull requests are not implemented.
 
-Command-O adds a project; Command-R searches; Command-Q quits.
+Use the platform's primary shortcut modifier with O to add a project, R to search, and Q to quit.
 
 ## Development
 
@@ -38,6 +38,6 @@ cargo clippy --locked --all-targets -- -D warnings
 cargo build --locked --release
 ```
 
-Application data lives in `~/Library/Application Support/Nightshift`. Set `NIGHTSHIFT_DATA_DIR` to a separate directory for manual testing. The original synthetic replay is retained as a library test utility and is no longer in the UI.
+Application data uses the platform's standard per-user data directory. Set `NIGHTSHIFT_DATA_DIR` to a specific directory for manual testing. The original synthetic replay is retained as a library test utility and is no longer in the UI.
 
 See [public issue discovery](docs/public-issue-discovery.md), [storage](docs/storage-implementation.md), and the [implementation plan](docs/implementation-plan.md). The local bundle is not signed or configured for distribution.

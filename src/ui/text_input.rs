@@ -8,6 +8,7 @@ use gpui::{
     SharedString, Style, TextRun, UTF16Selection, UnderlineStyle, Window, actions, div, fill,
     point, prelude::*, px, relative, rgb, rgba, size,
 };
+use nightshift::platform::{ShortcutModifier, TextInputShortcuts};
 use unicode_segmentation::*;
 
 actions!(
@@ -755,7 +756,6 @@ impl Render for TextInput {
             .focus(|style| style.border_color(rgb(super::ACCENT)))
             .line_height(px(24.))
             .text_size(px(14.))
-            .font_family(".AppleSystemUIFont")
             .px_3()
             .py_2()
             .child(TextElement { input: cx.entity() })
@@ -768,31 +768,78 @@ impl Focusable for TextInput {
     }
 }
 
-pub fn bind_keys(cx: &mut App) {
-    cx.bind_keys([
+pub fn bind_keys(cx: &mut App, modifier: ShortcutModifier, shortcuts: TextInputShortcuts) {
+    let mut bindings = vec![
         KeyBinding::new("backspace", Backspace, Some("TextInput")),
         KeyBinding::new("delete", Delete, Some("TextInput")),
         KeyBinding::new("left", Left, Some("TextInput")),
         KeyBinding::new("right", Right, Some("TextInput")),
         KeyBinding::new("shift-left", SelectLeft, Some("TextInput")),
         KeyBinding::new("shift-right", SelectRight, Some("TextInput")),
-        KeyBinding::new("cmd-z", Undo, Some("TextInput")),
-        KeyBinding::new("cmd-shift-z", Redo, Some("TextInput")),
-        KeyBinding::new("alt-left", WordLeft, Some("TextInput")),
-        KeyBinding::new("alt-right", WordRight, Some("TextInput")),
-        KeyBinding::new("alt-shift-left", SelectWordLeft, Some("TextInput")),
-        KeyBinding::new("alt-shift-right", SelectWordRight, Some("TextInput")),
-        KeyBinding::new("cmd-a", SelectAll, Some("TextInput")),
-        KeyBinding::new("cmd-v", Paste, Some("TextInput")),
-        KeyBinding::new("cmd-c", Copy, Some("TextInput")),
-        KeyBinding::new("cmd-x", Cut, Some("TextInput")),
+        KeyBinding::new(
+            &format!("{}-z", modifier.binding()),
+            Undo,
+            Some("TextInput"),
+        ),
+        KeyBinding::new(
+            &format!("{}-shift-z", modifier.binding()),
+            Redo,
+            Some("TextInput"),
+        ),
+        KeyBinding::new(
+            &format!("{}-left", modifier.word_binding()),
+            WordLeft,
+            Some("TextInput"),
+        ),
+        KeyBinding::new(
+            &format!("{}-right", modifier.word_binding()),
+            WordRight,
+            Some("TextInput"),
+        ),
+        KeyBinding::new(
+            &format!("{}-shift-left", modifier.word_binding()),
+            SelectWordLeft,
+            Some("TextInput"),
+        ),
+        KeyBinding::new(
+            &format!("{}-shift-right", modifier.word_binding()),
+            SelectWordRight,
+            Some("TextInput"),
+        ),
+        KeyBinding::new(
+            &format!("{}-a", modifier.binding()),
+            SelectAll,
+            Some("TextInput"),
+        ),
+        KeyBinding::new(
+            &format!("{}-v", modifier.binding()),
+            Paste,
+            Some("TextInput"),
+        ),
+        KeyBinding::new(
+            &format!("{}-c", modifier.binding()),
+            Copy,
+            Some("TextInput"),
+        ),
+        KeyBinding::new(&format!("{}-x", modifier.binding()), Cut, Some("TextInput")),
         KeyBinding::new("home", Home, Some("TextInput")),
         KeyBinding::new("end", End, Some("TextInput")),
-        KeyBinding::new("cmd-left", Home, Some("TextInput")),
-        KeyBinding::new("cmd-right", End, Some("TextInput")),
-        KeyBinding::new("ctrl-cmd-space", ShowCharacterPalette, Some("TextInput")),
         KeyBinding::new("j", gpui::NoAction, Some("TextInput")),
         KeyBinding::new("k", gpui::NoAction, Some("TextInput")),
         KeyBinding::new("/", gpui::NoAction, Some("TextInput")),
-    ]);
+    ];
+    if let Some(binding) = shortcuts.line_start {
+        bindings.push(KeyBinding::new(binding, Home, Some("TextInput")));
+    }
+    if let Some(binding) = shortcuts.line_end {
+        bindings.push(KeyBinding::new(binding, End, Some("TextInput")));
+    }
+    if let Some(binding) = shortcuts.character_palette {
+        bindings.push(KeyBinding::new(
+            binding,
+            ShowCharacterPalette,
+            Some("TextInput"),
+        ));
+    }
+    cx.bind_keys(bindings);
 }

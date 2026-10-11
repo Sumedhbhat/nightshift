@@ -1,6 +1,6 @@
 # Nightshift MVP
 
-A local macOS desktop app for finding GitHub issues and running owner-initiated Codex work that can continue unattended through dependent issues, producing independent pull requests for manual review and merging.
+A cross-platform native desktop app for macOS, Linux, and Windows that finds GitHub issues and runs owner-initiated Codex work that can continue unattended through dependent issues, producing independent pull requests for manual review and merging. Maintain one shared Rust application; isolate necessary operating-system behavior behind the platform abstraction rather than separate application implementations.
 
 ## Planning status
 
@@ -25,9 +25,9 @@ The public-only restriction belongs to the anonymous scaffold and will be remove
 
 ## Keyboard interface
 
-All app workflows must be usable with the keyboard, with visible shortcut hints and focus indicators. ⌘1 through ⌘9 select projects in sidebar order; ⌘0 selects All projects. Projects beyond the ninth remain reachable through keyboard focus.
+All app workflows must be usable with the keyboard, with visible shortcut hints and focus indicators. The primary shortcut modifier with 1 through 9 selects projects in sidebar order; with 0 it selects All projects. Projects beyond the ninth remain reachable through keyboard focus.
 
-The issue search field combines text and filters. `/` or ⌘F focuses the field. Ordinary typing, selection, and clipboard editing use standard text input, without Vim modes. Search applies to fetched open issues across added projects, narrowed by the selected sidebar project. Title text and GitHub-style qualifiers such as `label:ready-for-agent`, `-label:bug`, `repo:owner/name`, and quoted label names can be combined. Show unsupported or incomplete filters explicitly rather than silently ignoring them. Enter in search or ⌘R refreshes only the selected project and fetches its first page; **Load more** fetches its next page. Esc moves focus to results without clearing the query. Arrow keys and `j`/`k` browse results outside the field, and Enter opens an issue. Tab and Shift-Tab reach other controls.
+The issue search field combines text and filters. `/` or the primary shortcut modifier with F focuses the field. Ordinary typing, selection, and clipboard editing use standard text input, without Vim modes. Search applies to fetched open issues across added projects, narrowed by the selected sidebar project. Title text and GitHub-style qualifiers such as `label:ready-for-agent`, `-label:bug`, `repo:owner/name`, and quoted label names can be combined. Show unsupported or incomplete filters explicitly rather than silently ignoring them. Enter in search or the primary shortcut modifier with R refreshes only the selected project and fetches its first page; **Load more** fetches its next page. Esc moves focus to results without clearing the query. Arrow keys and `j`/`k` browse results outside the field, and Enter opens an issue. Tab and Shift-Tab reach other controls.
 
 This is a local search over fetched open issues, not a GitHub-wide search or an implementation of every GitHub qualifier. It does not expand execution eligibility.
 
