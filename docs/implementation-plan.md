@@ -111,7 +111,7 @@ These are architectural constraints. They are not evidence that Nightshift alrea
 
 ## Storage proposal
 
-Use SQLite through `rusqlite`, with schema migrations, foreign keys, and serialized writes. Store application data under `~/Library/Application Support/Nightshift/`.
+Use SQLite through `rusqlite`, with schema migrations, foreign keys, and serialized writes. Store application data under the platform's per-user data directory, such as `~/Library/Application Support/Nightshift/` on macOS; `NIGHTSHIFT_DATA_DIR` overrides it.
 
 | Table | Main fields and purpose |
 | --- | --- |

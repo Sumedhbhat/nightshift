@@ -15,22 +15,60 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build:
-    name: Format, lint, test, and build
-    runs-on: macos-15
-    timeout-minutes: 30
+  format:
+    name: Check formatting
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
 
     steps:
       - name: Check out repository
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
+      - name: Check formatting
+        run: cargo fmt --all --check
+
+  build:
+    name: Lint, test, and package (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x86_64
+            os: ubuntu-24.04
+            bundle: sh scripts/bundle-linux.sh
+            artifact: target/release/nightshift-linux-x86_64.tar.gz
+          - name: linux-aarch64
+            os: ubuntu-24.04-arm
+            bundle: sh scripts/bundle-linux.sh
+            artifact: target/release/nightshift-linux-aarch64.tar.gz
+          - name: macos-aarch64
+            os: macos-15
+            bundle: sh scripts/bundle.sh --release
+            artifact: target/release/Nightshift.app
+          - name: macos-x86_64
+            os: macos-15-intel
+            bundle: sh scripts/bundle.sh --release
+            artifact: target/release/Nightshift.app
+          - name: windows-x86_64
+            os: windows-2022
+            bundle: pwsh scripts/bundle-windows.ps1
+            artifact: target/release/nightshift-windows-x86_64.zip
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: sh scripts/install-linux-deps.sh
+
       - name: Show tool versions
         run: |
           rustc --version
           cargo --version
-
-      - name: Check formatting
-        run: cargo fmt --all --check
+          git --version
 
       - name: Run Clippy
         run: cargo clippy --locked --all-targets -- -D warnings
@@ -38,5 +76,36 @@ jobs:
       - name: Run tests
         run: cargo test --locked
 
-      - name: Build release application
-        run: cargo build --locked --release
+      - name: Build release bundle
+        run: ${{ matrix.bundle }}
+
+      - name: Verify bundle contents
+        shell: bash
+        run: |
+          case "${{ runner.os }}" in
+            Linux)
+              tar -tzf "${{ matrix.artifact }}" | grep -E '/bin/nightshift$'
+              tar -tzf "${{ matrix.artifact }}" | grep -E '/dev\.nightshift\.app\.desktop$'
+              ;;
+            macOS)
+              test -x "${{ matrix.artifact }}/Contents/MacOS/nightshift"
+              test -f "${{ matrix.artifact }}/Contents/Info.plist"
+              ;;
+            Windows)
+              unzip -l "${{ matrix.artifact }}" | grep -E 'nightshift\.exe$'
+              ;;
+          esac
+
+      - name: Package macOS bundle
+        if: runner.os == 'macOS'
+        run: ditto -c -k --keepParent target/release/Nightshift.app target/release/nightshift-${{ matrix.name }}.zip
+
+      - name: Upload bundle
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: nightshift-${{ matrix.name }}
+          path: |
+            target/release/nightshift-*.tar.gz
+            target/release/nightshift-*.zip
+          if-no-files-found: error
+          retention-days: 7

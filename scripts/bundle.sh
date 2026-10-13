@@ -2,6 +2,10 @@
 # Build a local app bundle so macOS can identify and launch Nightshift.
 set -eu
 cd "$(dirname "$0")/.."
+case "$(uname -s)" in
+  Darwin) ;;
+  *) echo "scripts/bundle.sh builds a macOS app bundle. Use bundle-linux.sh or bundle-windows.ps1 elsewhere." >&2; exit 2 ;;
+esac
 profile=debug
 case "${1:-}" in
   "") cargo build --locked ;;

@@ -8,6 +8,7 @@ use gpui::{
 use nightshift::{
     domain::Project,
     github::{self, GitHub, Issue, Remote},
+    platform,
     storage::{self, Store},
 };
 use std::collections::HashMap;
@@ -46,7 +47,7 @@ actions!(
 struct SelectProject(usize);
 
 fn project_shortcut(index: usize) -> Option<String> {
-    (index < 9).then(|| format!("⌘{}", index + 1))
+    (index < 9).then(|| platform::secondary_shortcut(&(index + 1).to_string()))
 }
 
 struct IssueRow {
@@ -284,8 +285,10 @@ impl Nightshift {
                         this.selected = Some(project.id);
                         this.active_issue = None;
                         this.status = format!(
-                            "Added {}/{}. Press ⌘R to fetch open issues.",
-                            project.owner, project.name
+                            "Added {}/{}. Press {} to fetch open issues.",
+                            project.owner,
+                            project.name,
+                            platform::secondary_shortcut("R")
                         );
                         this.projects.push(project);
                     }
@@ -407,11 +410,16 @@ impl Nightshift {
     }
 }
 
-fn button(id: &'static str, label: &'static str, enabled: bool) -> gpui::Stateful<gpui::Div> {
+fn button(
+    id: &'static str,
+    label: impl Into<gpui::SharedString>,
+    enabled: bool,
+) -> gpui::Stateful<gpui::Div> {
+    let label = label.into();
     div()
         .id(id)
         .role(Role::Button)
-        .aria_label(label)
+        .aria_label(label.clone())
         .focusable()
         .tab_stop(true)
         .px_4()
@@ -450,20 +458,31 @@ impl Render for Nightshift {
             .map(|p| format!("{}/{}", p.owner, p.name))
             .unwrap_or_else(|| "All projects".into());
         let searching = self.search_input.focus_handle(cx).is_focused(window);
+        let refresh_shortcut = platform::secondary_shortcut("R");
         let empty = if self.projects.is_empty() {
-            "Add a local project with ⌘O to get started."
+            format!(
+                "Add a local project with {} to get started.",
+                platform::secondary_shortcut("O")
+            )
         } else if self.query.is_err() {
-            "Correct the search above to see matching issues."
+            "Correct the search above to see matching issues.".to_string()
         } else if self.busy {
-            "Fetching open issues from GitHub…"
+            "Fetching open issues from GitHub…".to_string()
         } else if self.selected.is_none() && self.issues.is_empty() {
-            "Select a project to fetch its first 10 open issues."
+            "Select a project to fetch its first 10 open issues.".to_string()
         } else if !scope_searched {
-            "Press Enter in search or ⌘R to fetch this project's first 10 open issues."
+            format!(
+                "Press Enter in search or {refresh_shortcut} to fetch this project's first 10 open issues."
+            )
         } else if !self.errors.is_empty() {
-            "No matching issues loaded. Review the errors below, then refresh with ⌘R."
+            format!(
+                "No matching issues loaded. Review the errors below, then refresh with {refresh_shortcut}."
+            )
         } else {
-            "No matching open issues. Edit the search or use ⌘0 to check all projects."
+            format!(
+                "No matching open issues. Edit the search or use {} to check all projects.",
+                platform::secondary_shortcut("0")
+            )
         };
         div().id("nightshift").role(Role::Application).aria_label("Nightshift")
             .track_focus(&self.focus).key_context("Nightshift")
@@ -491,12 +510,12 @@ impl Render for Nightshift {
             .on_action(|_: &NextFocus, window, cx| window.focus_next(cx))
             .on_action(|_: &PreviousFocus, window, cx| window.focus_prev(cx))
             .size_full().flex().flex_col().bg(rgb(BG)).text_color(rgb(TEXT))
-            .font_family(".AppleSystemUIFont").text_sm()
+            .text_sm()
             .child(div().flex().flex_1().min_h_0()
                 .child(div().w(px(248.)).flex_none().flex().flex_col().border_r_1().border_color(rgb(LINE))
-                    .child(div().px_5().py_5().font_family("Avenir Next").text_xl().child("Nightshift"))
+                    .child(div().px_5().py_5().font_weight(gpui::FontWeight::SEMIBOLD).text_xl().child("Nightshift"))
                     .child(div().px_5().pb_3().text_xs().text_color(rgb(MUTED)).child("PROJECTS"))
-                    .child(div().id("all-projects").role(Role::Button).aria_label("All projects, Command 0")
+                    .child(div().id("all-projects").role(Role::Button).aria_label(format!("All projects, {} 0", platform::secondary_modifier_name()))
                         .focusable().tab_stop(true).key_context("Selectable")
                         .border_l_2().border_color(rgb(if self.selected.is_none() { ACCENT } else { BG }))
                         .focus(|s| s.border_color(rgb(TEXT)))
@@ -504,7 +523,7 @@ impl Render for Nightshift {
                         .bg(rgb(if self.selected.is_none() { LINE } else { BG }))
                         .on_action(cx.listener(|this, _: &Activate, window, cx| this.select_project(&SelectProject(0), window, cx)))
                         .on_click(cx.listener(|this, _, window, cx| this.select_project(&SelectProject(0), window, cx)))
-                        .child("All projects").child(shortcut("⌘0")))
+                        .child("All projects").child(shortcut(platform::secondary_shortcut("0"))))
                     .child(div().id("projects").overflow_y_scroll().flex_1().min_h_0()
                         .children(self.projects.iter().enumerate().map(|(index, project)| {
                             let selected = self.selected == Some(project.id);
@@ -522,7 +541,7 @@ impl Render for Nightshift {
                                     .child(div().truncate().text_xs().text_color(rgb(MUTED)).child(project.owner.clone())))
                                 .children(project_shortcut(index).map(shortcut))
                         })))
-                    .child(div().p_4().child(button("add-project", "Add project  ⌘O", !self.busy && self.store.is_some())
+                    .child(div().p_4().child(button("add-project", format!("Add project  {}", platform::secondary_shortcut("O")), !self.busy && self.store.is_some())
                         .w_full().key_context("AddButton")
                         .on_click(cx.listener(|this, _, window, cx| this.add_project(&AddProject, window, cx))))))
                 .child(div().flex_1().min_w_0().flex().flex_col().bg(rgb(PANEL))
@@ -535,7 +554,7 @@ impl Render for Nightshift {
                             .children(has_more.then(|| button("load-more", "Load more", !self.busy)
                                 .key_context("LoadMoreButton")
                                 .on_click(cx.listener(|this, _, window, cx| this.load_more(&LoadMore, window, cx)))))
-                            .child(button("refresh", if self.busy { "Fetching…" } else { "Refresh  ⌘R" }, !self.busy && self.selected.is_some())
+                            .child(button("refresh", if self.busy { "Fetching…".to_string() } else { format!("Refresh  {refresh_shortcut}") }, !self.busy && self.selected.is_some())
                                 .key_context("SearchButton")
                                 .on_click(cx.listener(|this, _, window, cx| this.search(&SearchIssues, window, cx)))))
                         .child(div().text_xs().text_color(rgb(MUTED))
@@ -596,14 +615,14 @@ impl Render for Nightshift {
                 .px_5().py_2().flex_none().border_t_1().border_color(rgb(LINE)).text_xs().text_color(rgb(MUTED))
                 .flex().justify_between().gap_3()
                 .child(div().flex_1().min_w_0().truncate().child(self.status.clone()))
-                .child(div().flex_none().child("/ Search   ⌘0 All   ⌘1–9 Project   Tab Focus")))
+                .child(div().flex_none().child(format!("/ Search   {} All   {}–9 Project   Tab Focus", platform::secondary_shortcut("0"), platform::secondary_shortcut("1")))))
     }
 }
 
 fn shortcut(label: impl Into<gpui::SharedString>) -> impl IntoElement {
     div()
         .flex_none()
-        .font_family("Menlo")
+        .font_family(platform::MONOSPACE_FONT)
         .text_xs()
         .text_color(rgb(MUTED))
         .child(label.into())
@@ -613,7 +632,7 @@ pub fn run(runtime: Handle, startup: Startup) {
     gpui_platform::application().run(move |cx: &mut App| {
         for number in 0..=9 {
             cx.bind_keys([KeyBinding::new(
-                &format!("cmd-{number}"),
+                &format!("secondary-{number}"),
                 SelectProject(number),
                 Some("Nightshift"),
             )]);
@@ -624,17 +643,17 @@ pub fn run(runtime: Handle, startup: Startup) {
             KeyBinding::new("j", NextIssue, Some("Nightshift")),
             KeyBinding::new("k", PreviousIssue, Some("Nightshift")),
             KeyBinding::new("enter", OpenIssue, Some("Nightshift")),
-            KeyBinding::new("cmd-f", FocusSearch, Some("Nightshift")),
+            KeyBinding::new("secondary-f", FocusSearch, Some("Nightshift")),
             KeyBinding::new("escape", FocusResults, Some("Nightshift")),
             KeyBinding::new("down", NextIssue, Some("Nightshift")),
             KeyBinding::new("up", PreviousIssue, Some("Nightshift")),
             KeyBinding::new("down", FocusResults, Some("TextInput")),
             KeyBinding::new("up", gpui::NoAction, Some("TextInput")),
             KeyBinding::new("enter", SearchIssues, Some("TextInput")),
-            KeyBinding::new("cmd-q", Quit, None),
-            KeyBinding::new("cmd-w", Close, Some("Nightshift")),
-            KeyBinding::new("cmd-o", AddProject, Some("Nightshift")),
-            KeyBinding::new("cmd-r", SearchIssues, Some("Nightshift")),
+            KeyBinding::new("secondary-q", Quit, None),
+            KeyBinding::new("secondary-w", Close, Some("Nightshift")),
+            KeyBinding::new("secondary-o", AddProject, Some("Nightshift")),
+            KeyBinding::new("secondary-r", SearchIssues, Some("Nightshift")),
             KeyBinding::new("/", FocusSearch, Some("Nightshift")),
             KeyBinding::new("enter", AddProject, Some("AddButton")),
             KeyBinding::new("enter", SearchIssues, Some("SearchButton")),
@@ -655,6 +674,7 @@ pub fn run(runtime: Handle, startup: Startup) {
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 window_min_size: Some(size(px(840.), px(520.))),
+                app_id: Some("dev.nightshift.app".into()),
                 titlebar: Some(TitlebarOptions {
                     title: Some("Nightshift".into()),
                     ..Default::default()

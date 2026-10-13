@@ -231,7 +231,7 @@ fn checkout_inspection_validates_git_and_keeps_distinct_remotes() {
         let dir = tempfile::tempdir().unwrap();
         let git = |args: &[&str]| {
             assert!(
-                std::process::Command::new("/usr/bin/git")
+                std::process::Command::new("git")
                     .arg("-C")
                     .arg(dir.path())
                     .args(args)
