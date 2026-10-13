@@ -25,6 +25,14 @@ fn project(path: &str) -> NewProject {
     }
 }
 
+fn fixture_path(name: &str) -> String {
+    if cfg!(windows) {
+        format!(r"C:\fixture\{name}")
+    } else {
+        format!("/fixture/{name}")
+    }
+}
+
 fn issue(number: u32) -> IssueSnapshot {
     IssueSnapshot {
         id: format!("I_{number}"),
@@ -52,7 +60,7 @@ fn worker_persists_snapshots_output_and_audit_across_reopen() {
         let directory = tempfile::tempdir().unwrap();
         let store = Store::open(directory.path().into()).await.unwrap();
         let project = store
-            .add_project(project("/fixture/checkout"))
+            .add_project(project(&fixture_path("checkout")))
             .await
             .unwrap();
         assert_eq!(project.setup_command.as_deref(), Some("echo setup"));
@@ -114,8 +122,14 @@ fn simultaneous_starts_respect_global_limit_across_projects() {
     run(async {
         let directory = tempfile::tempdir().unwrap();
         let store = Store::open(directory.path().into()).await.unwrap();
-        let first = store.add_project(project("/fixture/first")).await.unwrap();
-        let second = store.add_project(project("/fixture/second")).await.unwrap();
+        let first = store
+            .add_project(project(&fixture_path("first")))
+            .await
+            .unwrap();
+        let second = store
+            .add_project(project(&fixture_path("second")))
+            .await
+            .unwrap();
         let mut tasks = Vec::new();
         for number in 1..=12 {
             let store = store.clone();
@@ -145,8 +159,11 @@ fn duplicate_issue_is_rejected_across_checkouts() {
     run(async {
         let directory = tempfile::tempdir().unwrap();
         let store = Store::open(directory.path().into()).await.unwrap();
-        let first = store.add_project(project("/fixture/first")).await.unwrap();
-        let mut other = project("/fixture/second");
+        let first = store
+            .add_project(project(&fixture_path("first")))
+            .await
+            .unwrap();
+        let mut other = project(&fixture_path("second"));
         other.github_host = "GITHUB.COM".into();
         let second = store.add_project(other).await.unwrap();
         store
@@ -168,7 +185,7 @@ fn parent_slot_serializes_siblings_but_not_different_parents() {
         let directory = tempfile::tempdir().unwrap();
         let store = Store::open(directory.path().into()).await.unwrap();
         let project = store
-            .add_project(project("/fixture/checkout"))
+            .add_project(project(&fixture_path("checkout")))
             .await
             .unwrap();
         let first = store
@@ -223,7 +240,7 @@ fn interrupted_capacity_is_retained_until_confirmed_and_late_events_are_rejected
         let directory = tempfile::tempdir().unwrap();
         let store = Store::open(directory.path().into()).await.unwrap();
         let project = store
-            .add_project(project("/fixture/checkout"))
+            .add_project(project(&fixture_path("checkout")))
             .await
             .unwrap();
         let first = store
@@ -278,7 +295,7 @@ fn output_is_bounded_and_paged_without_losing_history() {
         let directory = tempfile::tempdir().unwrap();
         let store = Store::open(directory.path().into()).await.unwrap();
         let project = store
-            .add_project(project("/fixture/checkout"))
+            .add_project(project(&fixture_path("checkout")))
             .await
             .unwrap();
         let saved = store
@@ -337,7 +354,7 @@ fn data_directory_lock_is_released_after_worker_closes() {
 fn failed_audit_insert_rolls_back_reservation_and_status() {
     let directory = tempfile::tempdir().unwrap();
     let mut db = Database::open(&directory.path().join("db.sqlite3")).unwrap();
-    let project = db.add_project(project("/fixture/checkout")).unwrap();
+    let project = db.add_project(project(&fixture_path("checkout"))).unwrap();
     db.connection.execute_batch("CREATE TRIGGER fail_audit BEFORE INSERT ON execution_events BEGIN SELECT RAISE(ABORT, 'injected disk write failure'); END;").unwrap();
     assert!(
         db.reserve(execution(project.id, 1, None), limit(1))
@@ -367,7 +384,7 @@ fn failed_audit_insert_rolls_back_reservation_and_status() {
 fn snapshots_cannot_be_updated_even_through_sql() {
     let directory = tempfile::tempdir().unwrap();
     let mut db = Database::open(&directory.path().join("db.sqlite3")).unwrap();
-    let project = db.add_project(project("/fixture/checkout")).unwrap();
+    let project = db.add_project(project(&fixture_path("checkout"))).unwrap();
     let saved = db
         .reserve(execution(project.id, 1, Some(10)), limit(1))
         .unwrap();
@@ -389,7 +406,9 @@ fn independent_connections_cannot_overbook_capacity() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("db.sqlite3");
     let mut first = Database::open(&path).unwrap();
-    let project = first.add_project(project("/fixture/checkout")).unwrap();
+    let project = first
+        .add_project(project(&fixture_path("checkout")))
+        .unwrap();
     let mut second = Database::open(&path).unwrap();
     let barrier = Arc::new(Barrier::new(2));
     let other = barrier.clone();
@@ -433,7 +452,7 @@ fn unknown_schema_is_rejected_without_changing_it() {
 fn failed_commit_does_not_leave_a_reserved_execution() {
     let directory = tempfile::tempdir().unwrap();
     let mut db = Database::open(&directory.path().join("db.sqlite3")).unwrap();
-    let project = db.add_project(project("/fixture/checkout")).unwrap();
+    let project = db.add_project(project(&fixture_path("checkout"))).unwrap();
     // A deferred foreign key fails at COMMIT, after the execution and event inserts succeeded.
     db.connection.execute_batch("CREATE TABLE commit_guard (project_id INTEGER REFERENCES projects(id) DEFERRABLE INITIALLY DEFERRED);
         CREATE TRIGGER fail_commit AFTER INSERT ON execution_events BEGIN INSERT INTO commit_guard VALUES (-1); END;").unwrap();
@@ -460,7 +479,9 @@ fn competing_siblings_reserve_only_one_parent_slot() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("db.sqlite3");
     let mut first = Database::open(&path).unwrap();
-    let project = first.add_project(project("/fixture/checkout")).unwrap();
+    let project = first
+        .add_project(project(&fixture_path("checkout")))
+        .unwrap();
     let mut second = Database::open(&path).unwrap();
     let barrier = Arc::new(Barrier::new(2));
     let other = barrier.clone();
