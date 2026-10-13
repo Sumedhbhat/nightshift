@@ -63,10 +63,23 @@ pub fn parse_remote(value: &str) -> Option<(String, String)> {
     (valid_segment(owner) && valid_segment(name)).then(|| (owner.to_owned(), name.to_owned()))
 }
 
+#[cfg(windows)]
+fn git_command() -> tokio::process::Command {
+    let mut command = tokio::process::Command::new("git");
+    // Without this, each Git invocation flashes a console window in the windowed build.
+    command.creation_flags(0x0800_0000);
+    command
+}
+
+#[cfg(not(windows))]
+fn git_command() -> tokio::process::Command {
+    tokio::process::Command::new("git")
+}
+
 async fn git(path: &std::path::Path, args: &[&str]) -> Result<String, String> {
     let output = tokio::time::timeout(
         Duration::from_secs(10),
-        tokio::process::Command::new("/usr/bin/git")
+        git_command()
             .arg("-C")
             .arg(path)
             .args(args)
@@ -75,7 +88,7 @@ async fn git(path: &std::path::Path, args: &[&str]) -> Result<String, String> {
     )
     .await
     .map_err(|_| "Git took too long to inspect this folder.".to_string())?
-    .map_err(|_| "Could not run Git. Install the Xcode command line tools.".to_string())?;
+    .map_err(|_| "Could not run Git. Install Git and make sure it is on your PATH.".to_string())?;
     if !output.status.success() {
         return Err("Choose an initialized Git repository with at least one commit.".into());
     }
@@ -87,7 +100,7 @@ pub async fn inspect_checkout(path: PathBuf) -> Result<Vec<Remote>, String> {
     let root = git(&path, &["rev-parse", "--show-toplevel"]).await?;
     let root = PathBuf::from(root.trim_end());
     git(&root, &["rev-parse", "--verify", "HEAD"]).await?;
-    let canonical = tokio::task::spawn_blocking(move || root.canonicalize())
+    let canonical = tokio::task::spawn_blocking(move || crate::platform::canonicalize(&root))
         .await
         .map_err(|e| e.to_string())?
         .map_err(|e| e.to_string())?;

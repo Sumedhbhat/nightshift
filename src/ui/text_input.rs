@@ -755,7 +755,6 @@ impl Render for TextInput {
             .focus(|style| style.border_color(rgb(super::ACCENT)))
             .line_height(px(24.))
             .text_size(px(14.))
-            .font_family(".AppleSystemUIFont")
             .px_3()
             .py_2()
             .child(TextElement { input: cx.entity() })
@@ -776,21 +775,34 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("right", Right, Some("TextInput")),
         KeyBinding::new("shift-left", SelectLeft, Some("TextInput")),
         KeyBinding::new("shift-right", SelectRight, Some("TextInput")),
-        KeyBinding::new("cmd-z", Undo, Some("TextInput")),
-        KeyBinding::new("cmd-shift-z", Redo, Some("TextInput")),
+        KeyBinding::new("secondary-z", Undo, Some("TextInput")),
+        KeyBinding::new("secondary-shift-z", Redo, Some("TextInput")),
+        KeyBinding::new("secondary-a", SelectAll, Some("TextInput")),
+        KeyBinding::new("secondary-v", Paste, Some("TextInput")),
+        KeyBinding::new("secondary-c", Copy, Some("TextInput")),
+        KeyBinding::new("secondary-x", Cut, Some("TextInput")),
+        KeyBinding::new("home", Home, Some("TextInput")),
+        KeyBinding::new("end", End, Some("TextInput")),
+    ]);
+    #[cfg(target_os = "macos")]
+    cx.bind_keys([
         KeyBinding::new("alt-left", WordLeft, Some("TextInput")),
         KeyBinding::new("alt-right", WordRight, Some("TextInput")),
         KeyBinding::new("alt-shift-left", SelectWordLeft, Some("TextInput")),
         KeyBinding::new("alt-shift-right", SelectWordRight, Some("TextInput")),
-        KeyBinding::new("cmd-a", SelectAll, Some("TextInput")),
-        KeyBinding::new("cmd-v", Paste, Some("TextInput")),
-        KeyBinding::new("cmd-c", Copy, Some("TextInput")),
-        KeyBinding::new("cmd-x", Cut, Some("TextInput")),
-        KeyBinding::new("home", Home, Some("TextInput")),
-        KeyBinding::new("end", End, Some("TextInput")),
         KeyBinding::new("cmd-left", Home, Some("TextInput")),
         KeyBinding::new("cmd-right", End, Some("TextInput")),
         KeyBinding::new("ctrl-cmd-space", ShowCharacterPalette, Some("TextInput")),
+    ]);
+    #[cfg(not(target_os = "macos"))]
+    cx.bind_keys([
+        KeyBinding::new("ctrl-left", WordLeft, Some("TextInput")),
+        KeyBinding::new("ctrl-right", WordRight, Some("TextInput")),
+        KeyBinding::new("ctrl-shift-left", SelectWordLeft, Some("TextInput")),
+        KeyBinding::new("ctrl-shift-right", SelectWordRight, Some("TextInput")),
+        KeyBinding::new("ctrl-y", Redo, Some("TextInput")),
+    ]);
+    cx.bind_keys([
         KeyBinding::new("j", gpui::NoAction, Some("TextInput")),
         KeyBinding::new("k", gpui::NoAction, Some("TextInput")),
         KeyBinding::new("/", gpui::NoAction, Some("TextInput")),

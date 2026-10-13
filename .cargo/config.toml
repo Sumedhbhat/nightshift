@@ -1,0 +1,3 @@
+[target.'cfg(target_os = "windows")']
+# Statically link the C runtime so the executable runs without the Visual C++ redistributable.
+rustflags = ["-C", "target-feature=+crt-static"]
