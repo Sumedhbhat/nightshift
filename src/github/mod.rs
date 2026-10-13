@@ -63,12 +63,17 @@ pub fn parse_remote(value: &str) -> Option<(String, String)> {
     (valid_segment(owner) && valid_segment(name)).then(|| (owner.to_owned(), name.to_owned()))
 }
 
+#[cfg(windows)]
 fn git_command() -> tokio::process::Command {
     let mut command = tokio::process::Command::new("git");
-    // Without this, each Git invocation flashes a console window in the windowed Windows build.
-    #[cfg(windows)]
+    // Without this, each Git invocation flashes a console window in the windowed build.
     command.creation_flags(0x0800_0000);
     command
+}
+
+#[cfg(not(windows))]
+fn git_command() -> tokio::process::Command {
+    tokio::process::Command::new("git")
 }
 
 async fn git(path: &std::path::Path, args: &[&str]) -> Result<String, String> {
