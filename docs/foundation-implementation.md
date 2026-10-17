@@ -10,6 +10,7 @@ The synthetic screen described here is historical. The application now opens the
 - `gpui` and `gpui_platform` use Zed revision `5a9b9558db01a6b906cec2fb70a797affdc58cdd`, fetched from GitHub. `Cargo.lock` pins the transitive dependencies.
 - The platform enables `font-kit` for macOS text rendering, following the [upstream README at the pinned revision](https://github.com/zed-industries/zed/blob/5a9b9558db01a6b906cec2fb70a797affdc58cdd/crates/gpui/README.md).
 - The first build found Xcode's optional Metal compiler missing. The platform's supported `runtime_shaders` feature compiles the embedded shaders through Metal at launch instead. Include this cost in startup measurements; revisit precompiled shaders for distribution.
+- The platform also enables `wayland` and `x11` for Linux release builds. The Zed workspace disables `gpui_linux` defaults, so without them a Linux build compiles but panics when it opens a window.
 - `src/main.rs` owns one Tokio runtime with two worker threads. `src/replay.rs` owns synthetic producers and bounded output; `src/ui.rs` owns GPUI entities, focus, actions, and virtualized lists.
 - A foreground GPUI task polls the Tokio channel every 33 milliseconds. It drains at most 256 messages per update. This small adapter avoids importing Zed's application infrastructure.
 
