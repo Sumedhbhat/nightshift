@@ -4,6 +4,10 @@ use nightshift::storage::{Error, Store};
 use std::sync::{Arc, OnceLock};
 
 fn main() {
+    if std::env::args().nth(1).as_deref() == Some("--version") {
+        println!("nightshift {}", nightshift::VERSION);
+        return;
+    }
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
         .enable_all()

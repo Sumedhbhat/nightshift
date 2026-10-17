@@ -4,23 +4,18 @@ A native macOS and Linux scaffold for adding local projects and fetching issues 
 
 ## Install a release
 
-Every push to `main` replaces the `nightly` prerelease on the [releases page](https://github.com/Sumedhbhat/nightshift/releases). Pushing a `vX.Y.Z` tag that matches the `Cargo.toml` version publishes a versioned release. Each release has archives for macOS (Apple silicon, Intel) and Linux (x86_64, aarch64), plus `SHA256SUMS` and `install.sh`.
+Stable releases come from `release/X.Y` branches. Nightly builds come from every push to `main`, for anyone who wants changes sooner. Both are on the [releases page](https://github.com/Sumedhbhat/nightshift/releases).
 
-The repository is private, so downloads need the [GitHub CLI](https://cli.github.com) signed in with `gh auth login`. To install or update to the latest `main` build:
-
-```sh
-gh release download nightly -R Sumedhbhat/nightshift -p install.sh -O - | sh
-```
-
-To install a specific version, pass its tag: `... | sh -s v0.1.0`. The script verifies the checksum. On macOS it installs `~/Applications/Nightshift.app`; on Linux it installs `~/.local/bin/nightshift` and a desktop entry. Set `NIGHTSHIFT_APP_DIR` or `NIGHTSHIFT_PREFIX` to install somewhere else.
-
-Linux builds need glibc 2.35 or newer, Git, and a Wayland or X11 session with Vulkan drivers. The macOS bundle has only an ad-hoc signature and is not notarized. The script clears its quarantine flag. If you download the zip manually, right-click the app and choose **Open** the first time.
-
-To cut a versioned release, bump `version` in `Cargo.toml` and merge it. Then tag `main`:
+Install or update on macOS or Linux:
 
 ```sh
-git tag v0.1.0 && git push origin v0.1.0
+curl -fsSL https://raw.githubusercontent.com/Sumedhbhat/nightshift/main/scripts/install.sh | sh             # stable
+curl -fsSL https://raw.githubusercontent.com/Sumedhbhat/nightshift/main/scripts/install.sh | sh -s nightly  # nightly
 ```
+
+Pass a tag such as `v0.1.0` instead of `nightly` to install that exact version. The script checks the download against `SHA256SUMS`. It installs `~/Applications/Nightshift.app` on macOS, or `~/.local/bin/nightshift` and a desktop entry on Linux. Set `NIGHTSHIFT_APP_DIR` or `NIGHTSHIFT_PREFIX` to install somewhere else. The installed version appears next to the app name and from `nightshift --version`.
+
+Linux builds need glibc 2.35 or newer, Git, and a Wayland or X11 session with Vulkan drivers. See [releases](docs/releases.md) for how releases are cut and patched.
 
 ## Run from source
 
@@ -60,7 +55,7 @@ cargo build --locked --release
 
 Application data lives in `~/Library/Application Support/Nightshift` on macOS and `$XDG_DATA_HOME/nightshift` (default `~/.local/share/nightshift`) on Linux. Set `NIGHTSHIFT_DATA_DIR` to a separate directory for manual testing. The original synthetic replay is retained as a library test utility and is no longer in the UI.
 
-See [public issue discovery](docs/public-issue-discovery.md), [storage](docs/storage-implementation.md), and the [implementation plan](docs/implementation-plan.md). The [Release workflow](.github/workflows/release.yml) builds and publishes the release archives.
+See [public issue discovery](docs/public-issue-discovery.md), [storage](docs/storage-implementation.md), and the [implementation plan](docs/implementation-plan.md). See [releases](docs/releases.md) for the release workflow.
 
 ## License
 

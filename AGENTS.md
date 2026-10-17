@@ -7,6 +7,7 @@ This repository contains a native Rust/GPUI app for macOS and Linux for adding l
 - Build for performance checks with `cargo build --locked --release`.
 - See [docs/foundation-implementation.md](docs/foundation-implementation.md) for implementation status and replay limits.
 - See [docs/public-issue-discovery.md](docs/public-issue-discovery.md) for the current project and issue workflow.
+- See [docs/releases.md](docs/releases.md) for the release channels and branching. Releases come from `release/X.Y` branches; nightlies come from `main`.
 - See [docs/storage-implementation.md](docs/storage-implementation.md) for persistence rules and unfinished integration work. Storage tests use temporary databases.
 
 - Read [MVP_CONCEPT.md](MVP_CONCEPT.md) for the complete current scope.

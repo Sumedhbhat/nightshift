@@ -8,9 +8,11 @@ case "${1:-}" in
   --release) profile=release; cargo build --locked --release ;;
   *) echo "Usage: sh scripts/bundle.sh [--release]" >&2; exit 2 ;;
 esac
+# Info.plist needs the plain numeric version; CI sets NIGHTSHIFT_VERSION to the full release version.
 version="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)"
 bundle="target/$profile/Nightshift.app"
-mkdir -p "$bundle/Contents/MacOS"
+mkdir -p "$bundle/Contents/MacOS" "$bundle/Contents/Resources"
+echo "${NIGHTSHIFT_VERSION:-$version}" > "$bundle/Contents/Resources/VERSION"
 cp "target/$profile/nightshift" "$bundle/Contents/MacOS/nightshift"
 cat > "$bundle/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
