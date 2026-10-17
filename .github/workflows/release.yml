@@ -1,0 +1,181 @@
+name: Release
+
+# Nightly prereleases come from main and stable releases from release/X.Y branches.
+# See docs/releases.md.
+
+on:
+  push:
+    branches: [main, "release/**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  # Let every push to a release branch finish so no patch release is skipped.
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/heads/release/') }}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  version:
+    name: Determine version
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      channel: ${{ steps.version.outputs.channel }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Determine version and channel
+        id: version
+        run: |
+          manifest="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)"
+          case "$GITHUB_REF" in
+            refs/heads/release/*)
+              line="${GITHUB_REF#refs/heads/release/}"
+              case "$line" in
+                *.*.*) echo "Name release branches release/<major>.<minor>, not release/$line." >&2; exit 1 ;;
+              esac
+              case "$manifest" in
+                "$line".*) ;;
+                *) echo "Cargo.toml version $manifest does not belong to release/$line." >&2; exit 1 ;;
+              esac
+              channel=stable
+              version="$manifest"
+              ;;
+            refs/heads/main)
+              channel=nightly
+              version="$manifest-nightly.$GITHUB_RUN_NUMBER"
+              ;;
+            *)
+              channel=none
+              version="$manifest-dev.$GITHUB_RUN_NUMBER"
+              ;;
+          esac
+          echo "Building $version ($channel)"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+
+  bundle:
+    name: Bundle (${{ matrix.name }})
+    needs: version
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    env:
+      NIGHTSHIFT_VERSION: ${{ needs.version.outputs.version }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Ubuntu 22.04 links against an older glibc, so the binaries run on more distributions.
+          - name: linux-x86_64
+            os: ubuntu-22.04
+          - name: linux-aarch64
+            os: ubuntu-22.04-arm
+          - name: macos-aarch64
+            os: macos-15
+          - name: macos-x86_64
+            os: macos-15-intel
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: sh scripts/install-linux-deps.sh
+
+      # The Build workflow lints and tests on macOS only.
+      - name: Lint and test on Linux
+        if: runner.os == 'Linux'
+        run: |
+          cargo clippy --locked --all-targets -- -D warnings
+          cargo test --locked
+
+      - name: Build Linux archive
+        if: runner.os == 'Linux'
+        run: sh scripts/bundle-linux.sh
+
+      - name: Build macOS archive
+        if: runner.os == 'macOS'
+        run: |
+          sh scripts/bundle.sh --release
+          ditto -c -k --keepParent target/release/Nightshift.app target/release/nightshift-${{ matrix.name }}.zip
+
+      - name: Verify archive contents and version
+        run: |
+          case "${{ runner.os }}" in
+            Linux)
+              archive=target/release/nightshift-${{ matrix.name }}.tar.gz
+              tar -tzf "$archive" | grep -E '/bin/nightshift$'
+              tar -tzf "$archive" | grep -E '/dev\.nightshift\.app\.desktop$'
+              test "$(tar -xzOf "$archive" nightshift-${{ matrix.name }}/VERSION)" = "$NIGHTSHIFT_VERSION"
+              binary=target/release/nightshift
+              ;;
+            macOS)
+              unzip -l target/release/nightshift-${{ matrix.name }}.zip | grep -E 'Nightshift\.app/Contents/MacOS/nightshift$'
+              codesign --verify --strict target/release/Nightshift.app
+              test "$(cat target/release/Nightshift.app/Contents/Resources/VERSION)" = "$NIGHTSHIFT_VERSION"
+              binary=target/release/Nightshift.app/Contents/MacOS/nightshift
+              ;;
+          esac
+          test "$("$binary" --version)" = "nightshift $NIGHTSHIFT_VERSION"
+
+      - name: Upload archive
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: nightshift-${{ matrix.name }}
+          path: |
+            target/release/nightshift-*.tar.gz
+            target/release/nightshift-*.zip
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish ${{ needs.version.outputs.channel }} release
+    needs: [version, bundle]
+    if: github.event_name == 'push' && needs.version.outputs.channel != 'none'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      VERSION: ${{ needs.version.outputs.version }}
+      CHANNEL: ${{ needs.version.outputs.channel }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Download archives
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: nightshift-*
+          path: dist
+          merge-multiple: true
+
+      - name: Add installer and checksums
+        working-directory: dist
+        run: |
+          cp ../scripts/install.sh install.sh
+          sha256sum nightshift-* install.sh > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Create release
+        run: |
+          tag="v$VERSION"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "::notice::$tag is already released. Bump the patch version in Cargo.toml to publish a fix."
+            exit 0
+          fi
+          prerelease=""
+          [ "$CHANNEL" = nightly ] && prerelease="--prerelease"
+          gh release create "$tag" dist/* --target "$GITHUB_SHA" --title "Nightshift $VERSION" --generate-notes $prerelease
