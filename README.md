@@ -41,3 +41,7 @@ cargo build --locked --release
 Application data lives in `~/Library/Application Support/Nightshift`. Set `NIGHTSHIFT_DATA_DIR` to a separate directory for manual testing. The original synthetic replay is retained as a library test utility and is no longer in the UI.
 
 See [public issue discovery](docs/public-issue-discovery.md), [storage](docs/storage-implementation.md), and the [implementation plan](docs/implementation-plan.md). The local bundle is not signed or configured for distribution.
+
+## License
+
+Nightshift is available under the [MIT License](LICENSE).

@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.97"
 publish = false
+license = "MIT"
 
 [dependencies]
 gpui = { git = "https://github.com/zed-industries/zed", rev = "5a9b9558db01a6b906cec2fb70a797affdc58cdd", default-features = false }
