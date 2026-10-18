@@ -6,14 +6,12 @@ A native macOS and Linux scaffold for adding local projects and fetching issues 
 
 Stable releases come from `release/X.Y` branches. Nightly builds come from every push to `main`, for anyone who wants changes sooner. Both are on the [releases page](https://github.com/Sumedhbhat/nightshift/releases).
 
-Install or update on macOS or Linux:
+Download the package for your machine from a release:
 
-```sh
-curl -fsSL https://raw.githubusercontent.com/Sumedhbhat/nightshift/main/scripts/install.sh | sh             # stable
-curl -fsSL https://raw.githubusercontent.com/Sumedhbhat/nightshift/main/scripts/install.sh | sh -s nightly  # nightly
-```
+- macOS on Apple silicon: `nightshift-macos-aarch64.dmg`. Intel Macs: `nightshift-macos-x86_64.dmg`. Open it and drag Nightshift into Applications.
+- Debian or Ubuntu: `nightshift-linux-<arch>.deb`. Install it with `sudo apt install ./nightshift-linux-x86_64.deb`.
 
-Pass a tag such as `v0.1.0` instead of `nightly` to install that exact version. The script checks the download against `SHA256SUMS`. It installs `~/Applications/Nightshift.app` on macOS, or `~/.local/bin/nightshift` and a desktop entry on Linux. Set `NIGHTSHIFT_APP_DIR` or `NIGHTSHIFT_PREFIX` to install somewhere else. The installed version appears next to the app name and from `nightshift --version`.
+The macOS app isn't notarized yet, so the first launch needs one extra step. See [releases](docs/releases.md#macos). The installed version appears next to the app name and from `nightshift --version`.
 
 Linux builds need glibc 2.35 or newer, Git, and a Wayland or X11 session with Vulkan drivers. See [releases](docs/releases.md) for how releases are cut and patched.
 
@@ -29,7 +27,8 @@ Or build a local app bundle:
 
 ```sh
 sh scripts/bundle.sh --release        # macOS: target/release/Nightshift.app
-sh scripts/bundle-linux.sh            # Linux: target/release/nightshift-linux-<arch>.tar.gz
+sh scripts/bundle-dmg.sh              # macOS: target/release/nightshift-macos-<arch>.dmg
+sh scripts/bundle-deb.sh              # Linux: target/release/nightshift-linux-<arch>.deb
 ```
 
 ## Use

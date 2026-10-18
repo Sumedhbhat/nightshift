@@ -15,7 +15,7 @@ Every release is permanent and separate. The workflow never moves a tag or repla
 
 - next to the app name in the sidebar
 - `nightshift --version`
-- a `VERSION` file in each archive (`Nightshift.app/Contents/Resources/VERSION` on macOS)
+- a `VERSION` file in each package (`Nightshift.app/Contents/Resources/VERSION` on macOS, `/usr/share/doc/nightshift/VERSION` on Linux), and the Debian package version
 - the release title and tag
 
 Local builds without `NIGHTSHIFT_VERSION` show the plain `Cargo.toml` version. The macOS `Info.plist` always uses the plain version, because macOS requires a numeric one.
@@ -39,8 +39,27 @@ The workflow rejects branches named `release/X.Y.Z` and fails when `Cargo.toml` 
 
 ## Builds
 
-Each release has archives for macOS (Apple silicon, Intel) and Linux (x86_64, aarch64), plus `install.sh` and `SHA256SUMS`. Pull requests build and verify every archive without publishing. Linux builds run on Ubuntu 22.04 and need glibc 2.35 or newer.
+Each release has these packages, plus `SHA256SUMS`:
 
-The macOS bundle has an ad-hoc signature and isn't notarized. `install.sh` clears its quarantine flag. Someone who downloads the zip by hand has to right-click the app and choose **Open** the first time.
+| File | Platform |
+| --- | --- |
+| `nightshift-macos-aarch64.dmg` | macOS on Apple silicon |
+| `nightshift-macos-x86_64.dmg` | macOS on Intel |
+| `nightshift-linux-x86_64.deb` | Debian and Ubuntu on x86_64 |
+| `nightshift-linux-aarch64.deb` | Debian and Ubuntu on aarch64 |
 
-The Linux archive includes a desktop entry, `dev.nightshift.app.desktop`, so Nightshift appears in application launchers. It has no icon yet.
+GitHub adds the "Source code" archives to every release itself. They can't be removed, and you don't need them to install.
+
+Pull requests build and verify every package without publishing. Locally, `sh scripts/bundle-dmg.sh` and `sh scripts/bundle-deb.sh` build the same files.
+
+### macOS
+
+Open the disk image and drag Nightshift into Applications. The app has an ad-hoc signature and isn't notarized, so macOS blocks the first launch. Allow it in **System Settings → Privacy & Security → Open Anyway**, or run:
+
+```sh
+xattr -dr com.apple.quarantine /Applications/Nightshift.app
+```
+
+### Linux
+
+Install with `sudo apt install ./nightshift-linux-x86_64.deb`. apt pulls in the libraries Nightshift needs, plus Git and the Vulkan loader. The package adds a desktop entry, so Nightshift appears in application launchers. It has no icon yet. The packages are built on Ubuntu 22.04 and need glibc 2.35 or newer.
