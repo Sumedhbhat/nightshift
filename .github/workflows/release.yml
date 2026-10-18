@@ -98,42 +98,48 @@ jobs:
           cargo clippy --locked --all-targets -- -D warnings
           cargo test --locked
 
-      - name: Build Linux archive
+      - name: Build Debian package
         if: runner.os == 'Linux'
-        run: sh scripts/bundle-linux.sh
+        run: sh scripts/bundle-deb.sh
 
-      - name: Build macOS archive
+      - name: Build macOS disk image
         if: runner.os == 'macOS'
-        run: |
-          sh scripts/bundle.sh --release
-          ditto -c -k --keepParent target/release/Nightshift.app target/release/nightshift-${{ matrix.name }}.zip
+        run: sh scripts/bundle-dmg.sh
 
-      - name: Verify archive contents and version
+      - name: Verify package contents and version
         run: |
           case "${{ runner.os }}" in
             Linux)
-              archive=target/release/nightshift-${{ matrix.name }}.tar.gz
-              tar -tzf "$archive" | grep -E '/bin/nightshift$'
-              tar -tzf "$archive" | grep -E '/dev\.nightshift\.app\.desktop$'
-              test "$(tar -xzOf "$archive" nightshift-${{ matrix.name }}/VERSION)" = "$NIGHTSHIFT_VERSION"
-              binary=target/release/nightshift
+              package=target/release/nightshift-${{ matrix.name }}.deb
+              dpkg-deb --info "$package"
+              dpkg-deb --contents "$package" | grep -E '\./usr/bin/nightshift$'
+              dpkg-deb --contents "$package" | grep -E '\./usr/share/applications/dev\.nightshift\.app\.desktop$'
+              test "$(dpkg-deb --field "$package" Version)" = "$NIGHTSHIFT_VERSION"
+              sudo apt-get install --yes "./$package"
+              binary=/usr/bin/nightshift
               ;;
             macOS)
-              unzip -l target/release/nightshift-${{ matrix.name }}.zip | grep -E 'Nightshift\.app/Contents/MacOS/nightshift$'
-              codesign --verify --strict target/release/Nightshift.app
-              test "$(cat target/release/Nightshift.app/Contents/Resources/VERSION)" = "$NIGHTSHIFT_VERSION"
-              binary=target/release/Nightshift.app/Contents/MacOS/nightshift
+              image=target/release/nightshift-${{ matrix.name }}.dmg
+              hdiutil verify "$image"
+              mount="$(mktemp -d)"
+              hdiutil attach -nobrowse -readonly -mountpoint "$mount" "$image"
+              test -L "$mount/Applications"
+              codesign --verify --strict "$mount/Nightshift.app"
+              test "$(cat "$mount/Nightshift.app/Contents/Resources/VERSION")" = "$NIGHTSHIFT_VERSION"
+              cp -R "$mount/Nightshift.app" "$RUNNER_TEMP/Nightshift.app"
+              hdiutil detach "$mount"
+              binary="$RUNNER_TEMP/Nightshift.app/Contents/MacOS/nightshift"
               ;;
           esac
           test "$("$binary" --version)" = "nightshift $NIGHTSHIFT_VERSION"
 
-      - name: Upload archive
+      - name: Upload package
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: nightshift-${{ matrix.name }}
           path: |
-            target/release/nightshift-*.tar.gz
-            target/release/nightshift-*.zip
+            target/release/nightshift-*.deb
+            target/release/nightshift-*.dmg
           if-no-files-found: error
           retention-days: 7
 
@@ -152,21 +158,17 @@ jobs:
       CHANNEL: ${{ needs.version.outputs.channel }}
 
     steps:
-      - name: Check out repository
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-
-      - name: Download archives
+      - name: Download packages
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: nightshift-*
           path: dist
           merge-multiple: true
 
-      - name: Add installer and checksums
+      - name: Add checksums
         working-directory: dist
         run: |
-          cp ../scripts/install.sh install.sh
-          sha256sum nightshift-* install.sh > SHA256SUMS
+          sha256sum nightshift-* > SHA256SUMS
           cat SHA256SUMS
 
       - name: Create release
@@ -178,4 +180,6 @@ jobs:
           fi
           prerelease=""
           [ "$CHANNEL" = nightly ] && prerelease="--prerelease"
-          gh release create "$tag" dist/* --target "$GITHUB_SHA" --title "Nightshift $VERSION" --generate-notes $prerelease
+          notes="Download nightshift-macos-aarch64.dmg for Apple silicon Macs, nightshift-macos-x86_64.dmg for Intel Macs, or the nightshift-linux-<arch>.deb package for Debian and Ubuntu. See docs/releases.md for first-launch steps on macOS."
+          gh release create "$tag" dist/* --target "$GITHUB_SHA" --title "Nightshift $VERSION" \
+            --notes "$notes" --generate-notes $prerelease
