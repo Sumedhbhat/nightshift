@@ -1,5 +1,5 @@
 #!/bin/sh
-# Build a Debian package containing the binary and desktop entry.
+# Build a Debian package containing the binary, desktop entry, and icon.
 set -eu
 cd "$(dirname "$0")/.."
 case "$(uname -s)" in
@@ -16,9 +16,10 @@ case "$(uname -m)" in
 esac
 stage="target/release/deb"
 rm -rf "$stage"
-mkdir -p "$stage/DEBIAN" "$stage/usr/bin" "$stage/usr/share/applications" "$stage/usr/share/doc/nightshift"
+mkdir -p "$stage/DEBIAN" "$stage/usr/bin" "$stage/usr/share/applications" "$stage/usr/share/pixmaps" "$stage/usr/share/doc/nightshift"
 install -m 755 target/release/nightshift "$stage/usr/bin/nightshift"
 install -m 644 packaging/linux/dev.nightshift.app.desktop "$stage/usr/share/applications/dev.nightshift.app.desktop"
+install -m 644 packaging/icons/nightshift.png "$stage/usr/share/pixmaps/dev.nightshift.app.png"
 install -m 644 LICENSE "$stage/usr/share/doc/nightshift/copyright"
 echo "$version" > "$stage/usr/share/doc/nightshift/VERSION"
 

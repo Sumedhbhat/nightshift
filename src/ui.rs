@@ -680,6 +680,8 @@ pub fn run(runtime: Handle, startup: Startup) {
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 window_min_size: Some(size(px(840.), px(520.))),
+                // Matches the desktop entry name so Linux launchers show the app icon.
+                app_id: Some("dev.nightshift.app".into()),
                 titlebar: Some(TitlebarOptions {
                     title: Some("Nightshift".into()),
                     ..Default::default()

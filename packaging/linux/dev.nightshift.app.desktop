@@ -3,5 +3,7 @@ Type=Application
 Name=Nightshift
 Comment=Fetch GitHub issues for your local projects
 Exec=nightshift
+Icon=dev.nightshift.app
+StartupWMClass=dev.nightshift.app
 Terminal=false
 Categories=Development;
