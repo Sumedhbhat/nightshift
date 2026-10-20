@@ -198,6 +198,14 @@ impl Database {
     }
 
     pub(super) fn append_output(&mut self, id: i64, source: &str, payload: &str) -> Result<i64> {
+        self.append_output_batch(id, &[(source.to_owned(), payload.to_owned())])
+    }
+
+    pub(super) fn append_output_batch(
+        &mut self,
+        id: i64,
+        blocks: &[(String, String)],
+    ) -> Result<i64> {
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -212,12 +220,20 @@ impl Database {
         if stopped {
             return Err(Error::InvalidTransition);
         }
-        let sequence: i64 = tx.query_row(
-            "SELECT coalesce(max(sequence), 0) + 1 FROM execution_output WHERE execution_id = ?1",
+        let mut sequence: i64 = tx.query_row(
+            "SELECT coalesce(max(sequence), 0) FROM execution_output WHERE execution_id = ?1",
             [id],
             |r| r.get(0),
         )?;
-        tx.execute("INSERT INTO execution_output (execution_id, sequence, source, payload) VALUES (?1, ?2, ?3, ?4)", params![id, sequence, source, payload])?;
+        {
+            let mut insert = tx.prepare_cached(
+                "INSERT INTO execution_output (execution_id, sequence, source, payload) VALUES (?1, ?2, ?3, ?4)",
+            )?;
+            for (source, payload) in blocks {
+                sequence += 1;
+                insert.execute(params![id, sequence, source, payload])?;
+            }
+        }
         tx.commit()?;
         Ok(sequence)
     }

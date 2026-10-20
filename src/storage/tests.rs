@@ -324,12 +324,17 @@ fn data_directory_lock_is_released_after_worker_closes() {
         let clone = store.clone();
         store.close().await.unwrap();
         assert!(matches!(clone.summary().await, Err(Error::WorkerStopped)));
-        Store::open(directory.path().into())
-            .await
-            .unwrap()
-            .close()
-            .await
-            .unwrap();
+        // Other tests spawn subprocesses. A child forked while the lock was open holds the
+        // inherited descriptor until it calls exec, so allow that brief window to pass.
+        let mut reopened = Store::open(directory.path().into()).await;
+        for _ in 0..50 {
+            if !matches!(reopened, Err(Error::AlreadyOpen)) {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            reopened = Store::open(directory.path().into()).await;
+        }
+        reopened.unwrap().close().await.unwrap();
     });
 }
 
@@ -481,4 +486,50 @@ fn competing_siblings_reserve_only_one_parent_slot() {
             .count(),
         1
     );
+}
+
+#[test]
+fn batched_output_is_atomic_and_contiguous() {
+    run(async {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::open(directory.path().into()).await.unwrap();
+        let project = store.add_project(project("/fixture/batch")).await.unwrap();
+        let saved = store
+            .reserve(execution(project.id, 1, None), limit(1))
+            .await
+            .unwrap();
+        let blocks = |range: std::ops::Range<i32>| {
+            range
+                .map(|i| ("agent".to_string(), format!("block {i}")))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            store
+                .append_output_batch(saved.id, blocks(0..150))
+                .await
+                .unwrap(),
+            150
+        );
+        assert_eq!(
+            store.append_output_batch(saved.id, vec![]).await.unwrap(),
+            150
+        );
+        let mut invalid = blocks(0..3);
+        invalid[2].1 = "x".repeat(MAX_OUTPUT_BYTES + 1);
+        assert!(matches!(
+            store.append_output_batch(saved.id, invalid).await,
+            Err(Error::InvalidInput(_))
+        ));
+        let page = store.output(saved.id, 140).await.unwrap();
+        assert_eq!(page.len(), 10);
+        assert_eq!(page[0].sequence, 141);
+        assert_eq!(page[9].payload, "block 149");
+        assert_eq!(
+            store
+                .append_output(saved.id, "stderr".into(), "tail".into())
+                .await
+                .unwrap(),
+            151
+        );
+    });
 }

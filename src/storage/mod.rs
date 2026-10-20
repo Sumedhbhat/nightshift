@@ -9,6 +9,7 @@ use std::{fs::File, num::NonZeroU32, path::PathBuf};
 use tokio::sync::{mpsc, oneshot};
 
 pub const MAX_OUTPUT_BYTES: usize = 65_536;
+pub const MAX_OUTPUT_BATCH: usize = 4_096;
 const MAX_SNAPSHOT_BYTES: usize = 1_048_576;
 const QUEUE_CAPACITY: usize = 32;
 
@@ -200,6 +201,25 @@ impl Store {
             ));
         }
         self.call(move |database| database.append_output(id, &source, &payload))
+            .await
+    }
+
+    /// Append several blocks in one transaction. Returns the last sequence, or the current
+    /// last sequence for an empty batch. Every block is validated before any is written.
+    pub async fn append_output_batch(&self, id: i64, blocks: Vec<(String, String)>) -> Result<i64> {
+        if blocks.len() > MAX_OUTPUT_BATCH {
+            return Err(Error::InvalidInput("output batch exceeds 4096 blocks"));
+        }
+        for (source, payload) in &blocks {
+            if payload.len() > MAX_OUTPUT_BYTES
+                || !matches!(source.as_str(), "setup" | "agent" | "stderr")
+            {
+                return Err(Error::InvalidInput(
+                    "output needs a known source and at most 65536 bytes",
+                ));
+            }
+        }
+        self.call(move |database| database.append_output_batch(id, &blocks))
             .await
     }
 

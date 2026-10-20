@@ -1,4 +1,7 @@
+mod perf_view;
 mod text_input;
+
+pub use perf_view::{PerfConfig, run as run_perf};
 
 use gpui::{
     App, Bounds, Context, FocusHandle, Focusable, KeyBinding, PathPromptOptions, Role, Task,
@@ -88,10 +91,29 @@ struct Nightshift {
     _picker: Option<Task<()>>,
     _save: Option<Task<()>>,
     _search: Option<Task<()>>,
+    startup_report: Option<StartupReport>,
+}
+
+/// Written when `NIGHTSHIFT_STARTUP_REPORT` names a file; the app then quits after its first
+/// frame and project load. Used by `scripts/perf.sh` for repeated launch measurements.
+struct StartupReport {
+    path: std::path::PathBuf,
+    main_started: std::time::Instant,
+    first_render_ms: Option<f64>,
+    first_frame_ms: Option<f64>,
+    first_frame_unix_ms: Option<u128>,
+    projects_loaded_ms: Option<f64>,
+    written: bool,
 }
 
 impl Nightshift {
-    fn new(window: &mut Window, runtime: Handle, startup: Startup, cx: &mut Context<Self>) -> Self {
+    fn new(
+        window: &mut Window,
+        runtime: Handle,
+        startup: Startup,
+        main_started: std::time::Instant,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let focus = cx.focus_handle();
         focus.focus(window, cx);
         let search_input = cx.new(TextInput::new);
@@ -118,6 +140,10 @@ impl Nightshift {
             let result = startup.await;
             let _ = this.update(cx, |this, cx| {
                 this.busy = false;
+                if let Some(report) = &mut this.startup_report {
+                    report.projects_loaded_ms =
+                        Some(nightshift::perf::elapsed_ms(report.main_started));
+                }
                 match result {
                     Ok(Ok((store, projects))) => {
                         this.store = Some(store);
@@ -160,7 +186,56 @@ impl Nightshift {
             _picker: None,
             _save: None,
             _search: None,
+            startup_report: std::env::var_os("NIGHTSHIFT_STARTUP_REPORT").map(|path| {
+                StartupReport {
+                    path: path.into(),
+                    main_started,
+                    first_render_ms: None,
+                    first_frame_ms: None,
+                    first_frame_unix_ms: None,
+                    projects_loaded_ms: None,
+                    written: false,
+                }
+            }),
         }
+    }
+
+    fn record_startup(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(report) = &mut self.startup_report else {
+            return;
+        };
+        if report.first_render_ms.is_none() {
+            report.first_render_ms = Some(nightshift::perf::elapsed_ms(report.main_started));
+            let entity = cx.entity().downgrade();
+            window.on_next_frame(move |_, cx| {
+                let _ = entity.update(cx, |this, cx| {
+                    if let Some(report) = &mut this.startup_report {
+                        report.first_frame_ms =
+                            Some(nightshift::perf::elapsed_ms(report.main_started));
+                        report.first_frame_unix_ms =
+                            Some(nightshift::perf::unix_ms(std::time::SystemTime::now()));
+                    }
+                    cx.notify();
+                });
+            });
+        }
+        if report.written || report.first_frame_ms.is_none() || report.projects_loaded_ms.is_none()
+        {
+            return;
+        }
+        report.written = true;
+        let json = serde_json::json!({
+            "version": nightshift::VERSION,
+            "os": std::env::consts::OS,
+            "main_to_first_render_ms": report.first_render_ms,
+            "main_to_first_frame_ms": report.first_frame_ms,
+            "main_to_projects_loaded_ms": report.projects_loaded_ms,
+            "first_frame_unix_ms": report.first_frame_unix_ms,
+        });
+        if let Err(error) = std::fs::write(&report.path, json.to_string()) {
+            eprintln!("nightshift: could not write startup report: {error}");
+        }
+        cx.defer(|cx| cx.quit());
     }
 
     fn select_project(
@@ -446,6 +521,7 @@ fn button(
 
 impl Render for Nightshift {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.record_startup(window, cx);
         let visible = self.visible_issues();
         let count = visible.len();
         let scope_fetched = self.selected.map_or(self.issues.len(), |id| {
@@ -634,7 +710,7 @@ fn shortcut(label: impl Into<gpui::SharedString>) -> impl IntoElement {
         .child(label.into())
 }
 
-pub fn run(runtime: Handle, startup: Startup) {
+pub fn run(runtime: Handle, startup: Startup, main_started: std::time::Instant) {
     gpui_platform::application().run(move |cx: &mut App| {
         for number in 0..=9 {
             cx.bind_keys([KeyBinding::new(
@@ -688,7 +764,7 @@ pub fn run(runtime: Handle, startup: Startup) {
                 }),
                 ..Default::default()
             },
-            |window, cx| cx.new(|cx| Nightshift::new(window, runtime, startup, cx)),
+            |window, cx| cx.new(|cx| Nightshift::new(window, runtime, startup, main_started, cx)),
         )
         .expect("open Nightshift window");
         cx.activate(true);

@@ -4,6 +4,7 @@ use nightshift::storage::{Error, Store};
 use std::sync::{Arc, OnceLock};
 
 fn main() {
+    let main_started = std::time::Instant::now();
     if std::env::args().nth(1).as_deref() == Some("--version") {
         println!("nightshift {}", nightshift::VERSION);
         return;
@@ -13,6 +14,11 @@ fn main() {
         .enable_all()
         .build()
         .expect("create background runtime");
+    if let Some(config) = ui::PerfConfig::from_env(main_started) {
+        ui::run_perf(runtime.handle().clone(), config);
+        runtime.shutdown_timeout(std::time::Duration::from_secs(1));
+        return;
+    }
     let store = Arc::new(OnceLock::<Store>::new());
     let startup_store = store.clone();
     let (startup_sender, startup_receiver) = tokio::sync::oneshot::channel();
@@ -31,7 +37,7 @@ fn main() {
         .await;
         let _ = startup_sender.send(result);
     });
-    ui::run(runtime.handle().clone(), startup_receiver);
+    ui::run(runtime.handle().clone(), startup_receiver, main_started);
     // Initialization owns a worker too. Finish it before closing, even on an immediate quit.
     if let Err(error) = runtime.block_on(startup) {
         eprintln!("nightshift: history initialization task failed: {error}");
