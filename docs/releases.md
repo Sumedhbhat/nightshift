@@ -50,6 +50,8 @@ Each release has these packages, plus `SHA256SUMS`:
 
 GitHub adds the "Source code" archives to every release itself. They can't be removed, and you don't need them to install.
 
+Both packages take the app icon from `packaging/icons/nightshift.png`, a square 1024×1024 PNG. The macOS build scales it into `Nightshift.icns`, and the Debian package installs it as `/usr/share/pixmaps/dev.nightshift.app.png`.
+
 Pull requests build and verify every package without publishing. Locally, `sh scripts/bundle-dmg.sh` and `sh scripts/bundle-deb.sh` build the same files.
 
 ### macOS
@@ -62,4 +64,4 @@ xattr -dr com.apple.quarantine /Applications/Nightshift.app
 
 ### Linux
 
-Install with `sudo apt install ./nightshift-linux-x86_64.deb`. apt pulls in the libraries Nightshift needs, plus Git and the Vulkan loader. The package adds a desktop entry, so Nightshift appears in application launchers. It has no icon yet. The packages are built on Ubuntu 22.04 and need glibc 2.35 or newer.
+Install with `sudo apt install ./nightshift-linux-x86_64.deb`. apt pulls in the libraries Nightshift needs, plus Git and the Vulkan loader. The package adds a desktop entry, so Nightshift appears in application launchers. The app icon comes from `packaging/icons/nightshift.png`. The packages are built on Ubuntu 22.04 and need glibc 2.35 or newer.

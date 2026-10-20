@@ -114,6 +114,7 @@ jobs:
               dpkg-deb --info "$package"
               dpkg-deb --contents "$package" | grep -E '\./usr/bin/nightshift$'
               dpkg-deb --contents "$package" | grep -E '\./usr/share/applications/dev\.nightshift\.app\.desktop$'
+              dpkg-deb --contents "$package" | grep -E '\./usr/share/pixmaps/dev\.nightshift\.app\.png$'
               test "$(dpkg-deb --field "$package" Version)" = "$NIGHTSHIFT_VERSION"
               sudo apt-get install --yes "./$package"
               binary=/usr/bin/nightshift
@@ -124,6 +125,8 @@ jobs:
               mount="$(mktemp -d)"
               hdiutil attach -nobrowse -readonly -mountpoint "$mount" "$image"
               test -L "$mount/Applications"
+              test -s "$mount/Nightshift.app/Contents/Resources/Nightshift.icns"
+              test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIconFile' "$mount/Nightshift.app/Contents/Info.plist")" = Nightshift
               codesign --verify --strict "$mount/Nightshift.app"
               test "$(cat "$mount/Nightshift.app/Contents/Resources/VERSION")" = "$NIGHTSHIFT_VERSION"
               cp -R "$mount/Nightshift.app" "$RUNNER_TEMP/Nightshift.app"
