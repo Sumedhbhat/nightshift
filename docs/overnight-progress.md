@@ -36,7 +36,7 @@ Local results are for fast iteration. CI on clean macOS and Linux runners is the
 - [x] 2. Persist projects and execution records (branch `nightshift/m2-storage`)
 - [x] 3. Implement manual issue discovery (branch `nightshift/m3-discovery`)
 - [x] 4. Prepare isolated worktrees (branch `nightshift/m4-worktrees`)
-- [ ] 5. Integrate Codex
+- [x] 5. Integrate Codex (branch `nightshift/m5-codex`)
 - [ ] 6. Validate the complete workflow
 
 ## Log
@@ -66,3 +66,7 @@ Local results are for fast iteration. CI on clean macOS and Linux runners is the
 - Milestone 4: added `src/git/worktree.rs` (fetch, unique branch and path, worktree, setup, reuse on retry) and a storage-backed `ExecutionRecorder`. Docs are in docs/worktree-preparation.md. Decision D12.
 - Fixed a "text file busy" race in the fake `gh` script test.
 - Local results: fmt passed, Clippy passed, and tests passed (58) in 6 consecutive runs.
+- Milestone 4 PR: https://github.com/Sumedhbhat/nightshift/pull/15 (base `nightshift/m3-discovery`).
+- Milestone 5: added `src/codex/rpc.rs` (JSON-RPC over stdio) and `src/codex/mod.rs` (session, turn, server-request policy, output batching, process stop, prompt). Added `examples/codex_turn.rs`. Decisions D13 and D14.
+- Real runtime, codex-cli 0.162.1, signed in: the handshake response was verified, and a one-file turn completed in 7.8 s. The first interrupt test left a `sleep` running: Codex's sandbox uses new sessions, and the leftover was stopped by hand. After adding descendant and sandbox cleanup, the rerun left nothing.
+- Local results: fmt passed, Clippy passed, and the Codex tests passed (11).

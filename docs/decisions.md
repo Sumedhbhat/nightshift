@@ -110,3 +110,19 @@ Process output is spooled to storage in batches. If storage fails or its backlog
 **Reason.** The data directory is outside every checkout and already owned by Nightshift. The execution ID makes names unique across retries, duplicate checkouts, and other accountable owners. A shell command matches how owners write setup steps such as `npm ci && make`.
 
 **Tradeoff.** Worktrees are not next to the project, so editors must open them from the path in the execution details. Updating `refs/remotes/<remote>/<default>` is visible in the owner's repository, which is what any `git fetch` would do.
+
+## D13. Codex sandbox, approvals, and commits
+
+**Decision.** Start threads with `sandbox: workspace-write` and `approvalPolicy: never`, with the worktree as the working directory. Decline approval requests, decline MCP elicitations, and answer every other server request with JSON-RPC error `-32601`. Log each one in the execution output. Codex does not commit; after a completed turn, Nightshift commits the worktree's changes during publication.
+
+**Reason.** The MVP has no conversational intervention, so no request may wait for an answer. `workspace-write` keeps writes inside the worktree. A Git worktree's metadata lives in the owner's repository, outside that sandbox, so Codex could not commit there anyway. Committing outside the sandbox keeps the sandbox tight.
+
+**Tradeoff.** Work that needs network access or writes outside the worktree fails inside the turn, and Codex reports it as a failed command. Owners can do such preparation in the project's setup command, which runs outside the sandbox.
+
+## D14. Process ownership, stop-on-quit, and crashes
+
+**Decision.** One app server per execution, in its own process group, with its PID recorded on the slot attempt. Stopping interrupts the turn and closes stdin. It then signals the group, and finally stops every descendant captured beforehand plus any Codex sandbox process naming the worktree. The slot is released only when all are confirmed gone. After a crash, restart marks the attempt interrupted, keeping its slot. Confirming the stop checks that the recorded PID is still a Codex app server before signaling it, and sweeps sandbox processes for the worktree.
+
+**Reason.** In a real interrupted turn, Codex's sandboxed command outlived the app server, so killing the process group alone would leave owned work running while freeing its slot.
+
+**Tradeoff.** Finding processes by command line is best effort after a crash. A sandboxed command whose wrapper has already exited and that does not mention the worktree cannot be found. The app server itself exits when its standard input closes, which happens when Nightshift dies.
