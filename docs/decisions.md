@@ -102,3 +102,11 @@ Process output is spooled to storage in batches. If storage fails or its backlog
 **Reason.** A dry run authenticates against the remote's receive service, so it exposes missing write access or credentials that would need a prompt. It sends no objects and creates no refs.
 
 **Tradeoff.** An owner-configured `core.sshCommand` without batch mode could still prompt on a terminal-attached launch. Overriding it would change owner-managed credential behavior, so Nightshift leaves it alone.
+
+## D12. Worktree location, naming, and setup
+
+**Decision.** Create worktrees under the application data directory in `worktrees/<owner>-<repo>/`. Name branches `nightshift/<issue>-<slug>-<execution-id>`. Run setup with `/bin/sh -c` and a 30-minute timeout. Fetch only the default branch into its remote-tracking ref.
+
+**Reason.** The data directory is outside every checkout and already owned by Nightshift. The execution ID makes names unique across retries, duplicate checkouts, and other accountable owners. A shell command matches how owners write setup steps such as `npm ci && make`.
+
+**Tradeoff.** Worktrees are not next to the project, so editors must open them from the path in the execution details. Updating `refs/remotes/<remote>/<default>` is visible in the owner's repository, which is what any `git fetch` would do.
