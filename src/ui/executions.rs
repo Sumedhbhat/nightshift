@@ -105,7 +105,19 @@ impl Nightshift {
                 cx.background_executor()
                     .timer(std::time::Duration::from_millis(500))
                     .await;
-                let Ok(()) = this.update(cx, |this, cx| this.poll_output(cx)) else {
+                let Ok(()) = this.update(cx, |this, cx| {
+                    // Evidence and status change while work runs; refresh them with the output.
+                    let live = this
+                        .executions
+                        .list
+                        .iter()
+                        .any(|e| e.status == Status::Running || e.holds_slot());
+                    if this.executions.view == View::Executions && live {
+                        this.reload_executions(cx);
+                    } else {
+                        this.poll_output(cx);
+                    }
+                }) else {
                     return;
                 };
             }
@@ -686,6 +698,7 @@ impl Nightshift {
                         div()
                             .pt_2()
                             .flex()
+                            .flex_wrap()
                             .gap_2()
                             .child(
                                 button(
