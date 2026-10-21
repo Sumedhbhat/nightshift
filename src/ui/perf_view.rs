@@ -6,15 +6,14 @@ use gpui::{
 };
 use nightshift::{
     application::Coordinator,
-    domain::{ExecutionChange, IssueSnapshot, NewExecution, NewProject, StoredOutput},
+    domain::{IssueIdentity, IssueSnapshot, NewProject, OutputSource, StoredOutput},
     perf::{self, Distribution},
     replay::{self, OutputCache, Replay},
-    storage::Store,
+    storage::{Entry, Store},
 };
 use serde::Serialize;
 use std::{
     collections::{HashMap, HashSet, VecDeque},
-    num::NonZeroU32,
     path::PathBuf,
     time::{Duration, Instant, SystemTime},
 };
@@ -472,27 +471,46 @@ async fn seed(directory: PathBuf) -> Result<(Store, i64, f64), nightshift::stora
             setup_command: None,
         })
         .await?;
-    let execution = Coordinator::new(store.clone(), NonZeroU32::MIN)
-        .reserve(NewExecution {
-            project_id: project.id,
-            issue: IssueSnapshot {
+    let checking = store
+        .begin_checking(
+            project.id,
+            IssueIdentity {
+                id: "I_perf".into(),
+                number: 1,
+            },
+            "perf-fixture".into(),
+        )
+        .await?;
+    let execution = match Coordinator::new(store.clone())
+        .enter_working(
+            checking.id,
+            IssueSnapshot {
                 id: "I_perf".into(),
                 number: 1,
                 title: "Performance fixture".into(),
                 description: "Synthetic stored output".into(),
             },
-            parent: None,
-        })
-        .await?;
-    store
-        .change(execution.id, ExecutionChange::Started, "Fixture".into())
-        .await?;
+            None,
+        )
+        .await?
+    {
+        Entry::Entered(execution) => execution,
+        Entry::WaitingForCapacity(_) => {
+            return Err(nightshift::storage::Error::InvalidInput(
+                "fixture has no capacity",
+            ));
+        }
+    };
     let mut written = 0;
     while written < STORED_BLOCKS {
         let batch = (written..(written + 4_000).min(STORED_BLOCKS))
             .map(|index| {
                 (
-                    if index % 7 == 0 { "stderr" } else { "agent" }.to_string(),
+                    if index % 7 == 0 {
+                        OutputSource::Stderr
+                    } else {
+                        OutputSource::Agent
+                    },
                     format!(
                         "stored block {index:06} · synthetic agent output for paging measurement {}",
                         "x".repeat(index % 48)

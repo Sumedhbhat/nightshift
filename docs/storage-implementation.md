@@ -8,42 +8,44 @@ This implements the storage and reservation portion of milestone 2 in the [imple
 
 The window opens without awaiting SQLite. A one-shot result updates the footer with history counts or an error. The application owns initialization and waits for it during shutdown, including an immediate quit. It then drains earlier storage commands and closes the database before shutting down Tokio. Synthetic replay data never enters persistent history.
 
-The worker serializes requests through a 32-message channel. SQLite uses foreign keys, `synchronous=FULL`, and a two-second busy timeout. Migration 1 runs in a transaction; a newer schema is rejected. `rusqlite` 0.40.2 bundles SQLite, with transitive versions in `Cargo.lock`.
+The worker serializes requests through a 32-message channel. SQLite uses foreign keys, `synchronous=FULL`, and a two-second busy timeout. Migrations 1 and 2 run in one transaction; a newer schema is rejected. `rusqlite` 0.40.2 bundles SQLite, with transitive versions in `Cargo.lock`.
 
-## Reservation and state rules
+## Workflow and capacity rules
 
-The coordinator requires an explicit nonzero concurrency limit. It has no default, Settings UI, or live reconfiguration policy yet. Reservation is only a local capacity operation. Future run orchestration must establish owner authorization, readiness, dependency eligibility, and default-branch selection before calling it.
+Schema 2 (`002_workflow.sql`) implements the typed workflow from the [implementation plan](implementation-plan.md). It rebuilds the execution tables in one migration transaction. Schema 1 rows become legacy history: unconfirmed work becomes an interrupted record that keeps its slot, and confirmed work ends with a `legacy` outcome. Their events and output are preserved.
 
-Each reservation uses `BEGIN IMMEDIATE` to check capacity and insert the execution plus its first audit event. Partial unique indexes protect the issue and parent slots across local checkouts, using GitHub host plus stable issue identity. The current implementation limits siblings to a single parent slot. That restriction is obsolete under the independent-PR plan: a forward migration must remove it while preserving global capacity and duplicate-issue protection. Until then, storage does not match the target concurrency behavior. Transactional checks also hold when tested through separate SQLite connections.
+- **One record per issue.** An execution is created at `checking` from the issue's stable identity, the GitHub host, and the run owner. A unique index allows one non-legacy record per issue across all checkouts. Once a record reaches `working`, the issue is never started again (decision D4 in [decisions.md](decisions.md)). The parent-wide slot is gone; siblings run independently.
+- **Steps and statuses.** Steps are `checking`, `working`, `branch_published`, and `pull_request_published`. Triggers keep them monotonic. Statuses are `pending`, `running`, `error`, `interrupted`, and `ended`; `ended` is final and carries an outcome. Recoverable failures are step errors with the attempted transition, message, detail, and retry availability. Success clears the error in the same transaction (decision D6).
+- **Step policies and slots.** `Step::policy()` in `src/domain/mod.rs` declares whether each step consumes a slot; only `working` does. Entering a consuming step opens a *slot attempt* in the same immediate transaction that checks capacity, saves the immutable snapshots, and writes the audit event. Without capacity, the execution stays at `checking`, pending. The count query is built from the policies, so a new consuming step needs no reservation code (decision D3).
+- **Releasing capacity.** An attempt ends as finished, failed, or interrupted. It releases its slot only when the owned process is confirmed stopped, either at the end or later through `confirm_stopped`. **Retry working** requires a released previous attempt and acquires capacity again, preserving the snapshots and attempt history.
+- **Evidence.** Default branch, base commit, branch, worktree path, and Codex thread are written once; a conflicting value is rejected. Publication saves the pushed remote, ref, and commit, then the pull request's number, URL, and ID, each atomically with its step change.
+- **Publication.** It starts only after local work finished and the slot is released. A closed issue ends the execution as `publication_skipped`. A failed push or pull-request creation is a step error. Only `begin_publication`, the explicit **Recheck publication**, can continue it.
+- **Restart.** `reconcile_after_restart` runs before the window loads projects. Running checks return to pending. Unfinished working attempts become interrupted and keep their slots until the owned process is confirmed stopped. Interrupted publication becomes a retryable error. Nothing resumes automatically.
+- **Settings.** The concurrency limit lives in `settings`: default 2, range 1–8 (decision D5). The coordinator reads it in the same worker call that acquires capacity.
 
-Saved child and parent descriptions, titles, identities, and creation times are immutable. A database trigger rejects attempts to update them. Each state change and its audit event commit together, with UTC timestamps and per-execution sequences.
-
-Supported changes currently cover preparation, running, interruption, confirmed failure, and termination confirmation. Interrupted executions retain capacity until owned work is confirmed stopped. They cannot transition back to running. Failure releases capacity only when the caller confirms failure and termination together. Late state changes and output after termination confirmation are rejected.
-
-The planned **Retry working** action supersedes the current prohibition on interrupted continuation. The future migration must preserve attempt history, confirm old-process termination, and reserve capacity before a continuation attempt. Completed attempts remain immutable; reopening the app does not resume work automatically.
-
-There is intentionally no successful-completion operation yet. Passing checks, automated review, successor eligibility, and PR publication still need the decisions listed in the MVP. Free capacity alone does not make another issue eligible.
-
-The target workflow is now an ordered persisted state machine: checking, working, branch published, and pull request published. The current schema does not implement those states. A later forward migration must store each transition's evidence and error atomically with its audit event, leave failures at the incomplete step, and let an explicit owner retry resume only that step.
-
-Each target workflow step has explicit orchestration metadata declaring whether it consumes an execution slot. The orchestrator acquires capacity atomically when entering a consuming step, carries it across adjacent consuming steps, and releases it only after safely leaving the last one. Checking and publication do not consume capacity; working does. Future steps must declare the policy rather than modifying reservation logic directly.
-
-Recoverable errors attach to the current workflow step with the attempted transition and retained evidence. They do not advance to a generic failure state. An explicit owner retry resumes that transition; success clears the error atomically with the next state and audit event. Terminal local outcomes remain separate.
+Snapshots, identity, and the run owner are immutable through SQL as well, enforced by triggers.
 
 ## Output and limits
 
 Output blocks retain a source, payload, UTC timestamp, and monotonic sequence. Blocks are limited to 64 KiB by UTF-8 byte length; oversized input returns an error rather than truncating it. Output and audit reads use cursors and pages of at most 100 records. A child or parent snapshot is limited to 1 MiB before queueing. These initial engineering bounds are not measured production throughput limits.
 
-Output remains appendable during interruption while buffers drain, but not after termination is confirmed. The future process adapter must finish persistence before reporting termination to storage. No subprocess output adapter or storage-failure stop policy is wired yet.
+Process output (`setup`, `agent`, `stderr`) needs an unreleased slot attempt, so late output after a confirmed stop is rejected. Nightshift's own `system` and `git` messages may be added until the execution ends. Batches of up to 4,096 blocks commit in one transaction. The process adapter must finish persisting output before confirming the stop.
 
 ## Validation and remaining work
 
-Thirteen storage tests use temporary databases. They cover reopening with saved snapshots and output, global capacity across projects, duplicates across checkouts, competing siblings, independent parent slots, interrupted capacity, invalid late transitions, immutable snapshots, bounded output paging, instance locking, newer schemas, and rollback on both audit insertion and commit failure.
+Eighteen storage tests use temporary databases. They cover:
 
-Native release inspection confirmed the saved-history footer updates after asynchronous initialization. Quitting with replay active exited successfully, released the database lock, and left SQLite's integrity check passing with zero synthetic executions saved. One earlier native inspection remained on the loading message; a fresh launch with handoff logging completed successfully, without reproducing that stall. Repeated cold-launch validation remains open.
+- simultaneous starts filling the limit across projects, with the rest left pending and without snapshots;
+- two independent connections that cannot overbook;
+- duplicates across checkouts and after completion, and independent siblings;
+- failed checks staying at `checking`, and policy-derived slot accounting through every step;
+- interrupted attempts holding capacity until the stop is confirmed, and retry re-acquiring it;
+- immutable evidence, snapshots, identity, and step order;
+- publication skip and explicit recheck, and restart reconciliation;
+- rollback when the audit insert fails and when the commit fails;
+- schema 1 migration, settings bounds, and batched, bounded, paged output;
+- the instance lock and newer-schema rejection.
 
-Remaining milestone 2 work includes persisted Settings after its policy is settled, application run orchestration, process ownership records, branch/worktree metadata, and history inspection views. Startup currently preserves reserved records; it does not reconcile crashed processes, free uncertain slots, or resume work. Real execution must wait for process-lifetime decisions and integration tests.
-
-The [public issue discovery scaffold](public-issue-discovery.md) now verifies local projects and GitHub identity before calling project persistence. Storage itself remains separate from Git and network validation.
+Run orchestration, process supervision, and history views are later milestones. They use these storage operations through the coordinator.
 
 Implementation references: [rusqlite](https://docs.rs/rusqlite/0.40.2/rusqlite/), [SQLite transactions](https://www.sqlite.org/lang_transaction.html), and [Rust file locking](https://doc.rust-lang.org/std/fs/struct.File.html#method.try_lock).

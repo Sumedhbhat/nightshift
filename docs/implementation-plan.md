@@ -24,7 +24,7 @@ Keep the workflow graph and step policies compile-time typed for the MVP. Persis
 
 Model recoverable failure orthogonally to workflow position. Persist the current step, attempted transition, structured error, evidence already obtained, and whether owner retry is available. Do not move to a generic `failed` workflow state. On explicit retry, rerun only that transition and atomically clear the error when saving success. Reserve terminal states for interruption or unrecoverable local process outcomes.
 
-The existing storage enum (`preparing`, `running`, `interrupted`, `failed`) is foundation state and cannot express this target workflow. Add a forward SQLite migration and update the domain model rather than overloading the existing values. Preserve immutable issue snapshots and the audit history through migration.
+Schema 2 replaces the foundation's `preparing`/`running`/`interrupted`/`failed` enum with this workflow through a forward migration that preserves snapshots and audit history. See [storage-implementation.md](storage-implementation.md).
 
 The [public issue discovery scaffold](public-issue-discovery.md) now supports adding local projects and fetching public GitHub issues. It does not implement run eligibility or execution.
 
@@ -50,7 +50,7 @@ Treat multiple assignees as independent accountable owners. Membership of the ac
 
 Check readiness from current label presence only. Do not fetch label-event history or require the run owner to have applied the label.
 
-Reserve global execution capacity and prevent duplicate active work on the same issue. Eligible siblings may execute concurrently. Do not reserve a parent-wide slot or build on another execution's branch. The current storage schema still enforces a parent-wide slot; remove that constraint in a forward migration and update its tests before claiming this workflow is implemented.
+Reserve global execution capacity and prevent duplicate active work on the same issue. Eligible siblings may execute concurrently. Do not reserve a parent-wide slot or build on another execution's branch.
 
 For a same-repository dependency P on Q, do not start P while Q remains open. Reevaluate P after GitHub reports Q closed. Dependencies across repositories follow the same closure gate.
 
@@ -195,6 +195,7 @@ Revised on 2026-10-20 for the orchestration scope above. Progress, commands, and
    - Done before this revision: migration 1, the dedicated database worker, instance lock, a capacity-reservation coordinator, immutable snapshots, audit events, bounded output, and 13 storage tests.
    - Remaining: a forward migration to the typed workflow (`checking`, `working`, `branch_published`, `pull_request_published`) with step policies, step errors, attempts, process ownership, worktree and publication evidence, and a persisted concurrency-limit setting. Remove the parent-wide slot. Orchestrator-owned capacity acquisition on entry to slot-consuming steps.
    - Exit tests: simultaneous starts up to the limit, rejection beyond it, duplicates across checkouts, failed transactions leaving no partial state, saved-description immutability, policy-derived capacity behavior, and interrupted executions holding capacity until termination is confirmed.
+   - Status: complete. See [storage-implementation.md](storage-implementation.md).
 3. **Implement manual issue discovery.**
    - Done before this revision: local project inspection, remote parsing, and an anonymous public-issue scaffold with search and pagination.
    - Remaining: replace the anonymous client with a `gh` adapter that uses structured output, probes required commands and fields, never reads the token, and never falls back to anonymous requests. Admit public and private repositories the active account can access. List open issues assigned to the active account. Evaluate readiness: own label, parent label and state, direct and inherited "blocked by" dependencies, closed-only blocker resolution. Check direct push capability non-destructively.

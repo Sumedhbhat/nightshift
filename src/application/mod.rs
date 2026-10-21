@@ -1,25 +1,40 @@
+//! Application commands. The coordinator is the only caller allowed to acquire capacity.
 use crate::{
-    domain::{Execution, NewExecution},
-    storage::{Result, Store},
+    domain::{IssueSnapshot, Step},
+    storage::{Entry, Result, Store},
 };
-use std::num::NonZeroU32;
 
-/// Local reservation coordinator. No default limit or success gate is chosen here.
-/// A future owner-started run must validate GitHub eligibility before calling reserve.
+/// Owns capacity changes for slot-consuming steps. Step handlers never reserve slots directly.
+#[derive(Clone)]
 pub struct Coordinator {
     store: Store,
-    concurrency_limit: NonZeroU32,
 }
 
 impl Coordinator {
-    pub fn new(store: Store, concurrency_limit: NonZeroU32) -> Self {
-        Self {
-            store,
-            concurrency_limit,
-        }
+    pub fn new(store: Store) -> Self {
+        Self { store }
     }
 
-    pub async fn reserve(&self, execution: NewExecution) -> Result<Execution> {
-        self.store.reserve(execution, self.concurrency_limit).await
+    pub fn store(&self) -> &Store {
+        &self.store
+    }
+
+    /// Enter `working` after every start-eligibility gate has passed. The persisted concurrency
+    /// limit is read inside the same database transaction that acquires the slot.
+    pub async fn enter_working(
+        &self,
+        execution_id: i64,
+        issue: IssueSnapshot,
+        parent: Option<IssueSnapshot>,
+    ) -> Result<Entry> {
+        debug_assert!(Step::Working.policy().consumes_execution_slot);
+        self.store
+            .enter_working(execution_id, issue, parent, None)
+            .await
+    }
+
+    /// Explicit owner **Retry working**: requires the previous process to be confirmed stopped.
+    pub async fn retry_working(&self, execution_id: i64) -> Result<Entry> {
+        self.store.retry_working(execution_id, None).await
     }
 }

@@ -30,6 +30,8 @@ fn main() {
                 .map(std::path::PathBuf::from)
                 .unwrap_or_else(|| default_data_directory(home.into()));
             let store = Store::open(directory).await?;
+            // Nothing runs before this: interrupt unfinished work and never resume it automatically.
+            store.reconcile_after_restart().await?;
             let projects = store.projects().await?;
             let _ = startup_store.set(store.clone());
             Ok((store, projects))

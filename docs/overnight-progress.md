@@ -33,7 +33,7 @@ Local results are for fast iteration. CI on clean macOS and Linux runners is the
 ## Milestones
 
 - [x] 1. Prove and finish the GPUI foundation (branch `nightshift/m1-foundation`)
-- [ ] 2. Persist projects and execution records
+- [x] 2. Persist projects and execution records (branch `nightshift/m2-storage`)
 - [ ] 3. Implement manual issue discovery
 - [ ] 4. Prepare isolated worktrees
 - [ ] 5. Integrate Codex
@@ -52,3 +52,9 @@ Local results are for fast iteration. CI on clean macOS and Linux runners is the
 - Local results with the shim: fmt passed, Clippy passed, and tests passed in 10 consecutive runs.
 - CI for `4913d3d`: Build passed on `nightshift/m1-foundation` (run 39514581373) and on `perf/m1-foundation` (run 39514584230). Performance passed (run 39514584345).
 - Performance: ten-minute runs on macOS CI and Linux headless. Results are in docs/foundation-implementation.md. Milestone 1 is complete; the macOS frame p95 deviation matches the platform baseline.
+- Milestone 1 PR: https://github.com/Sumedhbhat/nightshift/pull/12 (base `main`). The `perf/m1-foundation` branch exists only to trigger the macOS performance workflow.
+
+### 2026-10-21
+
+- Milestone 2: added schema 2 (`src/storage/002_workflow.sql`), the typed workflow and step policies in `src/domain`, workflow storage operations, and a coordinator that reads the persisted limit. Startup now runs restart reconciliation. Decisions D3–D6.
+- Local results with the shim: Clippy passed, and tests passed (39, including 18 storage tests). Disabling the capacity guard as a mutation check made 3 tests fail.
