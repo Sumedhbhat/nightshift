@@ -32,7 +32,7 @@ Local results are for fast iteration. CI on clean macOS and Linux runners is the
 
 ## Milestones
 
-- [ ] 1. Prove and finish the GPUI foundation
+- [x] 1. Prove and finish the GPUI foundation (branch `nightshift/m1-foundation`)
 - [ ] 2. Persist projects and execution records
 - [ ] 3. Implement manual issue discovery
 - [ ] 4. Prepare isolated worktrees
@@ -46,3 +46,9 @@ Local results are for fast iteration. CI on clean macOS and Linux runners is the
 - Read AGENTS.md, MVP_CONCEPT.md, CONTEXT.md, the implementation plan, and all docs and source.
 - Baseline `cargo test --locked` failed: no C linker. Built the scratch shim described above.
 - With the shim: `cargo fmt --check` passed, `cargo test --locked` passed (27 tests), and `cargo clippy --locked --all-targets -- -D warnings` passed.
+- Added the performance scenario: `src/perf.rs`, `src/ui/perf_view.rs`, `scripts/perf.sh`, and `.github/workflows/perf.yml`. Also added batched output append in storage.
+- Fixed a race in the storage lock test. A child process forked by another test briefly inherits the lock descriptor. The test now retries the reopen for up to 1 s.
+- The locked desktop session withholds frames, so local GUI runs use `/tmp/ns-headless/run.sh`. It starts GNOME Shell headless on an isolated D-Bus session.
+- Local results with the shim: fmt passed, Clippy passed, and tests passed in 10 consecutive runs.
+- CI for `4913d3d`: Build passed on `nightshift/m1-foundation` (run 39514581373) and on `perf/m1-foundation` (run 39514584230). Performance passed (run 39514584345).
+- Performance: ten-minute runs on macOS CI and Linux headless. Results are in docs/foundation-implementation.md. Milestone 1 is complete; the macOS frame p95 deviation matches the platform baseline.

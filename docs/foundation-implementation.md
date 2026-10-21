@@ -34,4 +34,52 @@ The first debug launch reached `Render` in 440 ms. One release-process RSS sampl
 
 Use `sh scripts/bundle.sh --release` to create a local `.app` bundle. The app now initializes [local persistence](storage-implementation.md) off the UI thread and displays saved history counts separately from the fixtures.
 
-The startup log measures entry to the first `Render` call. It is not a measurement of a presented frame or an interactive window. Full release-mode startup, frame-time, interaction-latency, and ten-minute memory measurements remain necessary before closing milestone 1.
+## Performance validation
+
+Measured on 2026-10-21 with release builds of commit `4913d3d`. Milestone 1 is complete on the evidence below.
+
+### Method
+
+`sh scripts/perf.sh [output] [seconds] [launches]` runs three measurements and writes JSON reports plus `summary.json`. Each uses temporary data directories.
+
+1. **Startup.** It launches the real window ten times with `NIGHTSHIFT_STARTUP_REPORT`. Each launch records main entry to first render, first presented frame, and loaded projects, then quits. The script also measures process exec to first frame.
+2. **Platform baseline.** For 30 seconds, `NIGHTSHIFT_PERF_BASELINE=1` renders only a status line while requesting a frame every vsync. This isolates the platform's frame pacing from Nightshift's views.
+3. **Scenario.** `NIGHTSHIFT_PERF_REPORT` opens three virtualized lists for ten minutes. The first is 10,000 issue rows scrolled one row per frame. The second shows two replay streams at 100 events per second each, with 128-byte payloads, tailed live. The third is 100,000 stored output blocks in a temporary SQLite database, paged 100 at a time from the storage worker with at most 24 pages cached. It scrolls steadily and jumps every two seconds to force uncached loads. A timer simulates a keyboard selection change ten times per second.
+
+Frame intervals are measured between consecutive renders while a frame is requested every vsync. Input latency runs from the simulated action to the next render. Memory is sampled once per second: `VmRSS`/`VmHWM` on Linux, and `ps` RSS on macOS. CPU is process user plus system time divided by wall time.
+
+The `Performance` workflow runs the script on a clean `macos-15` runner when a `perf/**` branch is pushed.
+
+### Machines
+
+| Name | Hardware | OS and display |
+| --- | --- | --- |
+| macOS CI | GitHub `macos-15` runner, Apple M1 (Virtual), 3 cores, 7 GB | macOS 15.7.9, 60 Hz virtual display |
+| Linux dev | AMD Ryzen 5 3500U with Radeon Vega 8, 8 threads, 5 GB | Ubuntu 26.04.1, GNOME Shell 50.1 run headless with a 1920×1080@60 virtual monitor |
+
+The owner's MacBook Air M3 was not available during this run. Repeat the script there to compare with the earlier smoke checks above.
+
+### Results
+
+| Measure | Budget | macOS CI | Linux dev |
+| --- | --- | --- | --- |
+| Warm launch, exec to first frame, median of 9 | under 1 s | 170 ms | 241 ms |
+| First launch after build | reported separately | 2.38 s | 3.02 s |
+| Frame interval p50 / p95 / p99, scenario | p95 ≤ 16.7 ms | 16.67 / 18.68 / 20.25 ms | 47.2 / 49.1 / 49.9 ms |
+| Frame interval p95, empty-window baseline | — | 18.67 ms | 38.1 ms |
+| Missed frames, over 1.5× period | report | 191 of 35,871 (0.5%) | all, from compositor pacing |
+| Action to next render p95 / max | p95 < 50 ms | 10.4 / 43.5 ms | 39.4 / 43.3 ms |
+| Replay events received in 10 min | 120,000 offered | 119,159 | 119,996 |
+| Stored page load p50 / p95 | — | 6.8 / 15.8 ms | 8.4 / 14.6 ms |
+| Nightshift CPU, scenario | — | 21% of one core | 24% of one core |
+| RSS first / peak / last | plateau | 57 / 66 / 66 MiB | 106 / 111 / 101 MiB |
+| RSS growth, final quarter vs second | plateau | +1.0% | −8.3% |
+
+### Assessment
+
+- **Startup, input latency, large lists, sustained output, and memory meet their budgets.** RSS stays flat after the caches fill and does not grow with the 120,000 replay events or the 100,000 stored blocks.
+- **macOS frame p95 is 18.7 ms, above the 16.7 ms budget.** The empty-window baseline on the same runner has the same p95, so the deviation is the virtual machine's frame pacing, not Nightshift's views. The scenario's median sits exactly on the 60 Hz period, with 0.5% missed frames.
+- **Linux frame pacing is bounded by the headless compositor.** An empty GPUI window paces at 37 ms there, and the full scenario adds about 10 ms per frame. The local desktop session was locked, so a real display could not be used. This environment establishes no Linux frame budget.
+- **The replay limits stand as the initial production bounds.** The queue holds 256 events and the cache 2,048 blocks. The largest drain per 33 ms update was 40 events on macOS, well under the 256-message cap. Decision D7 in [decisions.md](decisions.md) records the resulting output limits.
+
+The first launch after a build includes Metal runtime-shader compilation on macOS and cold disk caches on both systems. It is reported separately, as planned.

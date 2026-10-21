@@ -2,7 +2,7 @@
 
 Nightshift should follow Zed's native Rust UI architecture and approach to responsiveness. Visual similarity is not a requirement. The implementation plan is in [implementation-plan.md](implementation-plan.md).
 
-The first native foundation implementation is in progress. See [foundation-implementation.md](foundation-implementation.md) for its current behavior, pinned dependencies, and validation.
+The native foundation is complete. See [foundation-implementation.md](foundation-implementation.md) for its behavior, pinned dependencies, and performance measurements.
 
 The MVP includes unattended progression through dependent issues and independent PR creation. Every execution starts from the latest fetched default branch and opens a PR against that branch. The implementation plan records the orchestration work still required.
 
