@@ -126,3 +126,27 @@ Process output is spooled to storage in batches. If storage fails or its backlog
 **Reason.** In a real interrupted turn, Codex's sandboxed command outlived the app server, so killing the process group alone would leave owned work running while freeing its slot.
 
 **Tradeoff.** Finding processes by command line is best effort after a crash. A sandboxed command whose wrapper has already exited and that does not mention the worktree cannot be found. The app server itself exits when its standard input closes, which happens when Nightshift dies.
+
+## D15. Refresh schedule and backoff
+
+**Decision.** Refresh every 5 minutes while a run is active, immediately when it starts, and immediately when an execution finishes. After a rate limit or transient GitHub failure, wait 1 minute, doubling each time to at most 30 minutes; a clean refresh resets the delay. Manual refresh runs once without moving the schedule, and requests during a refresh coalesce into one follow-up.
+
+**Reason.** The MVP fixes the interval and asks for backoff without values. Doubling from a minute recovers quickly from short outages while staying well inside GitHub's secondary-limit guidance.
+
+**Tradeoff.** A long outage can delay discovery by up to 30 minutes after GitHub recovers, unless the owner refreshes manually.
+
+## D16. Ending a run and capacity checks
+
+**Decision.** Ending a run stops discovery and new starts but lets active executions finish and publish. A refresh skips gate checks entirely once every slot is reserved.
+
+**Reason.** The MVP lets only owner shutdown or local terminal conditions stop work, and ending a run is not quitting. Skipping checks while full avoids spending GitHub requests on starts that cannot happen.
+
+**Tradeoff.** Ineligible issues are not reported while all slots are busy; they are reported at the next refresh with free capacity.
+
+## D17. Commits, pushes, and pull requests
+
+**Decision.** After a completed turn, Nightshift commits every worktree change with the owner's configured Git identity, using `--no-verify` and `--no-gpg-sign`. It pushes the exact commit to `refs/heads/<branch>` without setting upstream configuration, and reads the remote ref back as evidence. It looks for an existing pull request from the branch before creating one. The pull request body says `Refs #N`, not `Closes #N`. A turn that changes nothing is a retryable error, not a publication.
+
+**Reason.** Owner hooks and signing may prompt or need agents that an unattended run cannot answer. The lookup recovers from a crash between creating the pull request and recording it, without creating a duplicate. The team closes issues after merge, as the MVP describes.
+
+**Tradeoff.** Repositories that require signed commits reject the push; the owner must re-sign and push manually. Owners who want automatic closing must close the issue themselves after merge.

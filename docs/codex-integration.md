@@ -1,6 +1,6 @@
 # Codex integration
 
-This implements milestone 5 of the [implementation plan](implementation-plan.md). The run loop that uses it is milestone 6. Product rules are in [MVP_CONCEPT.md](../MVP_CONCEPT.md).
+This implements milestone 5 of the [implementation plan](implementation-plan.md). The run loop that uses it is described in [workflow-orchestration.md](workflow-orchestration.md). Product rules are in [MVP_CONCEPT.md](../MVP_CONCEPT.md).
 
 ## Protocol client
 
