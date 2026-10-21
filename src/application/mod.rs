@@ -1,5 +1,9 @@
 //! Application commands. The coordinator is the only caller allowed to acquire capacity.
+pub mod execution;
+pub mod run;
 pub mod start;
+#[cfg(test)]
+mod tests;
 
 use crate::{
     domain::{IssueSnapshot, Step},

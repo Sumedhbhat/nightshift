@@ -400,7 +400,14 @@ fn owned_process_exit_is_reported_and_shutdown_stops_a_stubborn_process() {
             "read line\necho '{\"id\":1,\"result\":{}}'\nread line\nread line\necho crashed >&2\nexit 3\n",
         )
         .unwrap();
-        let mut session = Session::spawn(Path::new("/bin/sh"), directory.path()).unwrap();
+        let mut session = Session::spawn(
+            &CodexCommand {
+                program: "/bin/sh".into(),
+                args: vec!["app-server".into()],
+            },
+            directory.path(),
+        )
+        .unwrap();
         assert!(session.process_id().is_some());
         session.handshake().await.unwrap();
         let sink = Sink::default();
@@ -421,7 +428,14 @@ fn owned_process_exit_is_reported_and_shutdown_stops_a_stubborn_process() {
             "perl -MPOSIX -e 'POSIX::setsid(); exec @ARGV' sleep 61 &\ntrap '' TERM\nsleep 60 &\nwait\nsleep 60\n",
         )
         .unwrap();
-        let mut stubborn = Session::spawn(Path::new("/bin/sh"), directory.path()).unwrap();
+        let mut stubborn = Session::spawn(
+            &CodexCommand {
+                program: "/bin/sh".into(),
+                args: vec!["app-server".into()],
+            },
+            directory.path(),
+        )
+        .unwrap();
         let pid = stubborn.process_id().unwrap();
         tokio::time::sleep(Duration::from_millis(500)).await;
         let children = descendants(pid).await;
