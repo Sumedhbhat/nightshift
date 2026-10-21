@@ -1,6 +1,6 @@
 # Working on Nightshift
 
-This repository contains a native Rust/GPUI app for macOS and Linux for adding local projects and fetching public GitHub issues, a SQLite persistence layer, and planning documents. Codex execution is not implemented.
+This repository contains a native Rust/GPUI app for macOS and Linux for adding local projects and fetching GitHub issues through an installed, signed-in GitHub CLI, a SQLite persistence layer, and planning documents. Codex execution is not implemented.
 
 - Run the app with `cargo run --locked`.
 - Validate with `cargo fmt --check`, `cargo test --locked`, and `cargo clippy --locked --all-targets -- -D warnings`.

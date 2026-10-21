@@ -1,4 +1,6 @@
 //! Application commands. The coordinator is the only caller allowed to acquire capacity.
+pub mod start;
+
 use crate::{
     domain::{IssueSnapshot, Step},
     storage::{Entry, Result, Store},

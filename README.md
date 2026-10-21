@@ -1,6 +1,6 @@
 # Nightshift
 
-A native macOS and Linux scaffold for adding local projects and fetching issues from public GitHub repositories.
+A native macOS and Linux app for adding local projects and fetching their GitHub issues through the GitHub CLI.
 
 ## Install a release
 
@@ -33,13 +33,13 @@ sh scripts/bundle-deb.sh              # Linux: target/release/nightshift-linux-<
 
 ## Use
 
-1. Click **Add project** and select an existing Git repository with at least one commit and a public `github.com` remote.
+1. Click **Add project** and select an existing Git repository with at least one commit and a `github.com` remote that your GitHub CLI account can access.
 2. If its remotes point to different GitHub repositories, choose one.
 3. Click **Search issues**. Nightshift fetches open issues across your added projects, excluding pull requests.
 4. Select a project in the sidebar to view its results. Click an issue to open it on GitHub.
 5. Click **Filter: all open issues** to search only issues labeled `ready-for-agent`. Click again to show all open issues.
 
-Projects persist between launches. Issue results are fetched when you search. Public access needs no sign-in; GitHub's unauthenticated API rate limits apply, and failures appear in the window. Private repositories, Codex execution, worktrees, and pull requests are not implemented.
+Projects persist between launches. Issue results are fetched when you search. Install the GitHub CLI and run `gh auth login` first; Nightshift uses that account and never signs in by itself. Failures appear in the window.
 
 Command-O adds a project; Command-R searches; Command-Q quits. On Linux, use Ctrl instead of Command.
 

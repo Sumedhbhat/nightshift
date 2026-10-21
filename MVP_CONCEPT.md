@@ -8,9 +8,9 @@ The MVP uses independent execution branches and pull requests targeting the repo
 
 ## Current scaffold
 
-The initial usable scaffold lets the owner add local repositories and fetch open issues from public GitHub repositories. It fetches up to ten results for the selected project at a time and provides a search field with GitHub-style qualifiers, including `label:ready-for-agent`. **Load more** follows GitHub pagination for that project. **All projects** combines results already fetched during the current session; it does not start a broader request. This browsing mode does not authorize execution or relax the run readiness rules below. Execution controls are not implemented yet.
+The initial usable scaffold lets the owner add local repositories and fetch open issues from GitHub repositories the active GitHub CLI account can access. It fetches up to ten results for the selected project at a time and provides a search field with GitHub-style qualifiers, including `label:ready-for-agent`. **Load more** follows GitHub pagination for that project. **All projects** combines results already fetched during the current session; it does not start a broader request. This browsing mode does not authorize execution or relax the run readiness rules below. Execution controls are not implemented yet.
 
-The public-only restriction belongs to the anonymous scaffold and will be removed by the authenticated GitHub CLI integration. The target accepts a repository when the active account can access it and limits execution candidates to issues assigned to that account.
+The authenticated GitHub CLI integration accepts a repository when the active account can access it and limits execution candidates to issues assigned to that account.
 
 ## Workflow
 

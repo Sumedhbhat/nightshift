@@ -1,12 +1,12 @@
-# Public issue discovery scaffold
+# Issue discovery
 
-The main screen now implements adding a local project and fetching public GitHub issues. It replaces the synthetic replay screen. The broader execution workflow remains in [MVP_CONCEPT.md](../MVP_CONCEPT.md).
+The main screen adds local projects and fetches GitHub issues through the authenticated GitHub CLI. It replaces the synthetic replay screen. The broader execution workflow remains in [MVP_CONCEPT.md](../MVP_CONCEPT.md).
 
 ## Project selection
 
 The native folder picker accepts directories. Background Git commands discover the checkout root and require an initialized repository with a commit. The root is canonicalized before storage. GitHub HTTPS, SSH, and Git remotes are recognized; other hosts are ignored. Remotes pointing to the same repository are combined, preferring `origin`. Distinct repositories are presented for owner selection.
 
-The GitHub repository endpoint verifies public access and supplies stable repository identity and canonical owner/name before the project is saved. Re-adding a saved checkout selects it. Projects reload from SQLite at startup.
+`gh api repos/{owner}/{repo}` verifies that the active account can access the repository, public or private. It supplies the stable repository identity and canonical owner/name before the project is saved. Re-adding a saved checkout selects it. Projects reload from SQLite at startup.
 
 ## Keyboard controls
 
@@ -40,24 +40,50 @@ A leading `-` also excludes title terms or repositories. `state:open` is accepte
 
 The field uses a standalone GPUI text-input entity adapted from the pinned GPUI input example. It handles Unicode grapheme movement, UTF-16 input-method ranges, selection, clipboard operations, and horizontal cursor scrolling. Search parsing lives in `src/issue_query.rs`; filtering and result navigation share the same visible-index calculation in `src/ui.rs`.
 
-Requests use an anonymous HTTP client, a Nightshift user-agent, and the GitHub REST API. No credentials are loaded and no remote writes occur. Each UI request asks GitHub for at most ten records from one selected repository. Pull requests are excluded using the response's `pull_request` field. Pagination follows GitHub's exact `rel="next"` URL, including its cursor; Nightshift rejects pagination links that change the API scheme, host, or port. A failed page preserves previously fetched project results and produces a per-project error, including GitHub's validation message when available. Failures do not appear as successful empty searches. The UI permits one fetch at a time, so older requests cannot overwrite newer ones.
+## GitHub CLI adapter
 
-Initial limits are ten GitHub records per UI request, 20 seconds per HTTP request, and 8 MiB per response page. Issue results stay in memory until the selected project is refreshed or the app quits; execution records are not created by discovery. Requests and Git commands run outside GPUI's foreground thread. Git commands have a ten-second timeout and terminate when their future is dropped.
+Every GitHub request runs the installed `gh` with structured JSON output (`src/github/cli.rs`). There is no anonymous fallback, and the anonymous HTTP client and its TLS dependencies are removed.
 
-This scaffold does not evaluate parents or dependencies and does not claim that displayed issues are eligible for execution. Project setup commands, authentication, execution controls, and PR creation are still absent.
+- **Prerequisites.** Before repository verification, `gh` must be installed and signed in to github.com. Nightshift never installs it, runs `gh auth login`, or requests scopes. A missing or signed-out CLI produces a message asking the owner to fix it outside the app.
+- **Capability probe.** Instead of trusting a version number, Nightshift checks that `gh --version` answers and that `gh api --help` lists `--method`, `--paginate`, `--slurp`, `--input`, and `--hostname`. It also requires `gh auth status --json hosts` to return the active account's `state` and `login`. Anything missing is reported as an incompatible CLI with an update instruction.
+- **Token handling.** Nightshift never passes `--show-token` and never reads tokens or credential files. `gh auth status --json hosts` does not include the token.
+- **Environment.** Commands run with prompts, pagers, colors, and update notices disabled. Each has a 30-second timeout and 16 MiB of output, and is terminated if its task is dropped. `NIGHTSHIFT_GH` overrides the executable for isolated testing.
+- **Errors.** Failures are classified from `gh`'s stderr: not found or inaccessible, forbidden, rate-limited, signed out, incompatible, or failed. Rate limits, timeouts, and generic failures are marked transient so an active run can back off.
 
-## Planned authenticated replacement
+The browse view asks for at most ten records per page from the selected repository with `gh api --include` and follows the `rel="next"` link. Links must stay on `https://api.github.com`. Pull requests are excluded. A failed page keeps earlier results and shows a per-project error. Failures never appear as empty searches, and the UI allows one fetch at a time. Results stay in memory until the project is refreshed or the app quits. Discovery never creates execution records.
 
-The anonymous HTTP client is historical scaffold behavior, not the target integration. Replace it with a GitHub CLI adapter that requires `gh` to be installed and already authenticated, uses the active account for repository verification and issue discovery, and never falls back to anonymous requests. The adapter must consume structured command output without extracting or storing the CLI's token. GitHub CLI installation and login remain outside Nightshift; the app reports a blocking prerequisite error when either is unavailable. It also validates the required commands and structured fields directly, rather than trusting a version threshold, and asks the owner to update an incompatible CLI. This moves request accounting to the user's authenticated GitHub identity and raises the normal REST primary limit from 60 unauthenticated requests per hour to the authenticated user's applicable limit.
+## Start eligibility
 
-The replacement removes the scaffold's public-only project restriction. A public or private repository is eligible to be added when the active account can access it. Repositories remain explicitly enrolled through the project workflow rather than imported from the account automatically.
+Execution candidates are separate from browsing. `eligibility::candidates` lists open issues assigned to the active account and labeled `ready-for-agent` in every added project. Pull requests are excluded, and closed issues are never listed. A failing project reports its own error without hiding the others.
+
+`application::start::check` evaluates every start gate immediately before reservation. It stops at the first project-level failure, so nothing is consumed:
+
+1. **Run owner.** The active `gh` account must still be the login captured when the run started. A logout or account switch blocks new starts.
+2. **Repository access.** The repository must be readable, must still have the enrolled node ID, must not be archived, and must grant the account push permission. A read-only repository is ineligible; forks are not used.
+3. **Push preflight.** `git push --dry-run` to the selected remote authenticates and negotiates without sending objects or updating refs. Prompts are disabled with `GIT_TERMINAL_PROMPT=0` and `GCM_INTERACTIVE=never`. If the owner has not configured an SSH command, OpenSSH runs in batch mode. Git configuration is never modified.
+4. **The issue itself.** It is re-read and must be open, not a pull request, assigned to the run owner, labeled `ready-for-agent`, and not a parent with sub-issues.
+5. **Parent.** If a parent exists, it must be readable, open, and labeled. It may be assigned to anyone. Its title and body are saved as parent context.
+6. **Dependencies.** The issue's and the open parent's "blocked by" lists come from `GET …/issues/{n}/dependencies/blocked_by`. A blocker resolves only when GitHub reports it closed, whatever the closure reason, including none. If GitHub's `total_blocked_by` count exceeds the blockers the account can read, the hidden ones block. A failed lookup also blocks. Inherited blockers are marked as such.
+
+Only GitHub state counts. A finished local execution of a blocker never resolves it. `start::Generations` gives each request a number, so a late result never replaces a newer one.
 
 ## Verification
 
-Tests cover accepted remote formats, invalid hosts and paths, initialized checkout validation, remote deduplication and selection, public metadata, private-repository rejection, cursor-paginated results, pull-request exclusion, readiness filtering, retained results on a failed page, and GitHub validation messages. Storage tests also verify that projects reload after reopening. Query tests cover combined title, label, and repository filters; quoted phrases; exclusions; label alternatives; empty queries; and invalid or unsupported syntax.
+Tests use an in-memory fake `gh` (`src/github/fake.rs`) and temporary Git repositories. They cover:
+
+- remote formats, checkout validation, and remote deduplication;
+- a missing, incompatible, or signed-out CLI, and account switches;
+- the subprocess environment, private-repository admission, and inaccessible repositories;
+- read-only, archived, and replaced repositories;
+- `Link` pagination, foreign-host links, and failed pages;
+- candidate filtering with a partial failure;
+- each issue gate, parent rules, inherited and cross-repository blockers, and every closure reason, including an absent one;
+- inaccessible dependencies and failed lookups;
+- a finished local execution not resolving an open blocker;
+- ordered start gates, push preflight against writable and unreachable remotes, and stale generations. Storage tests also verify that projects reload after reopening. Query tests cover combined title, label, and repository filters; quoted phrases; exclusions; label alternatives; empty queries; and invalid or unsupported syntax.
 
 For isolated native testing, set `NIGHTSHIFT_DATA_DIR` before launching the executable. Test projects then stay separate from normal application data.
 
-The live adapter smoke check verified a local checkout with a `rust-lang/rustlings` remote and fetched open issues without credentials. Run `cargo run --locked --example discover -- /path/to/repository` to repeat the adapter check. Automated coverage verifies that the UI adapter requests ten records and retains GitHub's next-page cursor. Native checks cover search focus, ordinary typing and grouped undo, live filtering, project shortcuts, result navigation, and query preservation when switching projects.
+The live smoke check ran on 2026-10-21 with `gh` 2.102.0. It verified this repository and `cli/cli` through the signed-in account, fetched a page of open issues, and evaluated eligibility for one public issue, including its dependency list. Repeat it with `cargo run --locked --example discover -- /path/to/repository [issue-number]`. Automated coverage verifies that the UI adapter requests ten records and retains GitHub's next-page cursor. Native checks cover search focus, ordinary typing and grouped undo, live filtering, project shortcuts, result navigation, and query preservation when switching projects.
 
 API references: [repository metadata](https://docs.github.com/en/rest/repos/repos#get-a-repository) and [repository issues](https://docs.github.com/en/rest/issues/issues#list-repository-issues).

@@ -286,7 +286,7 @@ impl Nightshift {
         }
         self.busy = true;
         self.remotes.clear();
-        self.status = "Choose a local Git repository linked to a public GitHub repo.".into();
+        self.status = "Choose a local Git repository with a GitHub remote.".into();
         let picker = cx.prompt_for_paths(PathPromptOptions {
             files: false,
             directories: true,
@@ -354,12 +354,9 @@ impl Nightshift {
         }
         self.busy = true;
         self.remotes.clear();
-        self.status = format!(
-            "Checking public repository {}/{}…",
-            remote.owner, remote.repo
-        );
+        self.status = format!("Checking {}/{} with GitHub CLI…", remote.owner, remote.repo);
         let work = self.runtime.spawn(async move {
-            let project = GitHub::new()?.verify(remote).await?;
+            let project = GitHub::from_env().verify(remote).await?;
             store.add_project(project).await.map_err(|e| e.to_string())
         });
         self._save = Some(cx.spawn(async move |this, cx| {
@@ -445,8 +442,8 @@ impl Nightshift {
         };
         let project_id = project.id;
         let work = self.runtime.spawn(async move {
-            let github = GitHub::new()?;
-            Ok::<_, String>(github.issue_page(&project, false, cursor.as_deref()).await)
+            let github = GitHub::from_env();
+            Ok::<_, String>(github.issue_page(&project, cursor.as_deref()).await)
         });
         self._search = Some(cx.spawn(async move |this, cx| {
             let result = work.await;

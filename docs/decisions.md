@@ -78,3 +78,27 @@ Process output is spooled to storage in batches. If storage fails or its backlog
 **Reason.** Clean CI runners on macOS and Linux build from the pinned Git dependencies with no sibling checkout. The adapter is a few lines, and `gpui_tokio` would pull in Zed's application infrastructure.
 
 **Tradeoff.** Updating GPUI requires re-running the performance scenario and the keyboard checks.
+
+## D9. GitHub CLI adapter shape
+
+**Decision.** Use `gh api` with REST paths for every read and write, so all output is JSON. Probe capabilities by checking `gh api --help` for the flags used and by parsing `gh auth status --json hosts`. Inject a `Runner` trait so tests use an in-memory fake. Never pass `--show-token`.
+
+**Reason.** One command family keeps the probe small and exact. `gh issue` and `gh pr` subcommands print human-oriented output for writes. `gh pr create`, for example, prints only a URL, while `gh api` returns the pull request's number and node ID.
+
+**Tradeoff.** Nightshift builds REST paths itself and must track GitHub REST changes rather than `gh` subcommand changes.
+
+## D10. Inaccessible dependencies and parents
+
+**Decision.** Compare the issue's `issue_dependencies_summary.total_blocked_by` with the blockers the account can list. Any shortfall means a blocker the account cannot see, and the start is blocked. Treat an issue with sub-issues as a parent, and exclude it from execution even when labeled. Read the parent through `parent_issue_url`, which may point to another repository.
+
+**Reason.** The "blocked by" endpoint omits issues the account cannot read. Without the count check, a hidden open blocker would look resolved. Single-issue reads include both summaries; list endpoints return them as null, so candidate lists are re-checked one issue at a time before any start.
+
+**Tradeoff.** One extra read per candidate and per parent at start time.
+
+## D11. Non-interactive push preflight
+
+**Decision.** Run `git push --dry-run --porcelain --no-verify` to a probe ref on the selected remote. Set `GIT_TERMINAL_PROMPT=0`, `GCM_INTERACTIVE=never`, and `SSH_ASKPASS_REQUIRE=never`, with standard input closed. When the owner has not set `GIT_SSH_COMMAND` or `GIT_SSH`, use `ssh -o BatchMode=yes`. Never change Git configuration.
+
+**Reason.** A dry run authenticates against the remote's receive service, so it exposes missing write access or credentials that would need a prompt. It sends no objects and creates no refs.
+
+**Tradeoff.** An owner-configured `core.sshCommand` without batch mode could still prompt on a terminal-attached launch. Overriding it would change owner-managed credential behavior, so Nightshift leaves it alone.

@@ -34,7 +34,7 @@ Local results are for fast iteration. CI on clean macOS and Linux runners is the
 
 - [x] 1. Prove and finish the GPUI foundation (branch `nightshift/m1-foundation`)
 - [x] 2. Persist projects and execution records (branch `nightshift/m2-storage`)
-- [ ] 3. Implement manual issue discovery
+- [x] 3. Implement manual issue discovery (branch `nightshift/m3-discovery`)
 - [ ] 4. Prepare isolated worktrees
 - [ ] 5. Integrate Codex
 - [ ] 6. Validate the complete workflow
@@ -58,3 +58,7 @@ Local results are for fast iteration. CI on clean macOS and Linux runners is the
 
 - Milestone 2: added schema 2 (`src/storage/002_workflow.sql`), the typed workflow and step policies in `src/domain`, workflow storage operations, and a coordinator that reads the persisted limit. Startup now runs restart reconciliation. Decisions D3–D6.
 - Local results with the shim: Clippy passed, and tests passed (39, including 18 storage tests). Disabling the capacity guard as a mutation check made 3 tests fail.
+- Milestone 2 PR: https://github.com/Sumedhbhat/nightshift/pull/13 (base `nightshift/m1-foundation`).
+- Milestone 3: added the `gh` adapter (`src/github/cli.rs`), an in-memory fake, candidate and eligibility evaluation (`src/github/eligibility.rs`), push preflight (`src/git`), and ordered start gates (`src/application/start.rs`). Removed `reqwest`, and with it aws-lc and rustls, from the dependency tree. Decisions D9–D11.
+- `/tmp` (a 2.6 GB tmpfs shared with other processes) hit its quota during a build. The shim now uses `TMPDIR=~/.cache/ns-tmp`.
+- Local results: fmt passed, Clippy passed, and tests passed (52). The live smoke check with `gh` 2.102.0 verified repositories, fetched issues, and evaluated eligibility for `cli/cli#14467`.
