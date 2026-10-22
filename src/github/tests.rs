@@ -184,7 +184,19 @@ fn subprocess_runner_disables_prompts_and_passes_arguments() {
     .unwrap();
     std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
     let gh = Gh::new(Arc::new(Subprocess::new(&script)));
-    let value: Value = run(gh.get("repos/owner/repo")).unwrap();
+    // A thread forking elsewhere can briefly hold the new script's write descriptor, which makes
+    // exec fail with "Text file busy". Retry that specific error.
+    let mut result = run(gh.get::<Value>("repos/owner/repo"));
+    for _ in 0..50 {
+        match &result {
+            Err(GhError::Failed(message)) if message.contains("Text file busy") => {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+                result = run(gh.get("repos/owner/repo"));
+            }
+            _ => break,
+        }
+    }
+    let value = result.unwrap();
     assert_eq!(value["prompt"], "1");
     assert_eq!(value["pager"], "cat");
     assert_eq!(

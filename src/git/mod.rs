@@ -1,5 +1,7 @@
 //! Git subprocesses with argument arrays. Credentials stay owner-managed: Nightshift never
 //! changes Git configuration and disables every interactive prompt.
+pub mod worktree;
+
 use std::{path::Path, time::Duration};
 
 pub const NETWORK_TIMEOUT: Duration = Duration::from_secs(120);
