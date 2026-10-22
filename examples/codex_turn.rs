@@ -35,6 +35,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .enable_all()
         .build()?;
     runtime.block_on(async {
+        nightshift::platform::initialize().await;
         let started = Instant::now();
         let mut session = Session::spawn(&CodexCommand::from_env(), &cwd)?;
         println!("[process] pid {:?}", session.process_id());

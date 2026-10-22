@@ -315,7 +315,7 @@ async fn create(request: &Request, recorder: &dyn Recorder) -> Result<Prepared, 
 /// Run the project's setup command with `sh -c` in the worktree, streaming its output.
 async fn setup(worktree: &Path, command: &str, recorder: &dyn Recorder) -> Result<(), Failure> {
     note(recorder, format!("Running setup: {command}")).await?;
-    let mut child = tokio::process::Command::new("/bin/sh")
+    let mut child = crate::platform::command("/bin/sh")
         .arg("-c")
         .arg(command)
         .current_dir(worktree)

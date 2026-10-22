@@ -69,7 +69,7 @@ pub fn parse_remote(value: &str) -> Option<(String, String)> {
 async fn git(path: &std::path::Path, args: &[&str]) -> Result<String, String> {
     let output = tokio::time::timeout(
         Duration::from_secs(10),
-        tokio::process::Command::new("git")
+        crate::platform::command("git")
             .arg("-C")
             .arg(path)
             .args(args)
