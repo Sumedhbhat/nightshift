@@ -46,6 +46,6 @@ Eighteen storage tests use temporary databases. They cover:
 - schema 1 migration, settings bounds, and batched, bounded, paged output;
 - the instance lock and newer-schema rejection.
 
-Run orchestration, process supervision, and history views are later milestones. They use these storage operations through the coordinator.
+Run orchestration, process supervision, and the executions view use these operations through the coordinator; see [workflow-orchestration.md](workflow-orchestration.md).
 
 Implementation references: [rusqlite](https://docs.rs/rusqlite/0.40.2/rusqlite/), [SQLite transactions](https://www.sqlite.org/lang_transaction.html), and [Rust file locking](https://doc.rust-lang.org/std/fs/struct.File.html#method.try_lock).

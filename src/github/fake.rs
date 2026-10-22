@@ -8,6 +8,7 @@ use std::{
 #[derive(Default)]
 pub struct FakeGh {
     responses: Mutex<HashMap<String, Vec<GhResult<CommandOutput>>>>,
+    prefixes: Mutex<Vec<(String, GhResult<CommandOutput>)>>,
     calls: Mutex<Vec<String>>,
 }
 
@@ -71,6 +72,14 @@ impl FakeGh {
             .insert(args.to_owned(), vec![response]);
     }
 
+    /// Answer any call whose arguments start with `prefix` and have no exact response.
+    pub fn respond_prefix(&self, prefix: &str, response: GhResult<CommandOutput>) {
+        self.prefixes
+            .lock()
+            .unwrap()
+            .push((prefix.to_owned(), response));
+    }
+
     pub fn get(&self, path: &str, value: serde_json::Value) {
         self.respond(
             &format!("api --hostname github.com --method GET {path}"),
@@ -112,9 +121,18 @@ impl Runner for FakeGh {
             match responses.get_mut(&key) {
                 Some(queue) if queue.len() > 1 => queue.remove(0),
                 Some(queue) if queue.len() == 1 => queue[0].clone(),
-                _ => fail(&format!(
-                    "gh: Not Found (HTTP 404) [fake has no response for `{key}`]"
-                )),
+                _ => match self
+                    .prefixes
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .find(|(prefix, _)| key.starts_with(prefix.as_str()))
+                {
+                    Some((_, response)) => response.clone(),
+                    None => fail(&format!(
+                        "gh: Not Found (HTTP 404) [fake has no response for `{key}`]"
+                    )),
+                },
             }
         };
         Box::pin(async move { response })

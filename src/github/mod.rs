@@ -169,6 +169,20 @@ struct ApiIssue {
     pull_request: Option<serde_json::Value>,
 }
 
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct PullRequestHead {
+    #[serde(rename = "ref")]
+    pub ref_name: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct PullRequest {
+    pub number: u32,
+    pub html_url: String,
+    pub node_id: String,
+    pub head: PullRequestHead,
+}
+
 /// What the active account may do with a repository, checked before each new execution.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RepositoryAccess {
@@ -249,6 +263,53 @@ impl GitHub {
             can_push: repo.permissions.unwrap_or_default().push,
             archived: repo.archived,
         })
+    }
+
+    /// Whether the issue is open now: the sole publication gate.
+    pub async fn issue_open(&self, project: &Project, number: u32) -> Result<bool, GhError> {
+        #[derive(Deserialize)]
+        struct State {
+            state: String,
+        }
+        let state: State = self
+            .gh
+            .get(&format!("{}/issues/{number}", repo_path(project)?))
+            .await?;
+        Ok(state.state == "open")
+    }
+
+    /// An existing pull request whose head is exactly this repository's `branch`, in any state.
+    pub async fn pull_request_for(
+        &self,
+        project: &Project,
+        branch: &str,
+    ) -> Result<Option<PullRequest>, GhError> {
+        let pulls: Vec<PullRequest> = self
+            .gh
+            .get(&format!(
+                "{}/pulls?head={}:{branch}&state=all&per_page=10",
+                repo_path(project)?,
+                project.owner
+            ))
+            .await?;
+        Ok(pulls.into_iter().find(|pull| pull.head.ref_name == branch))
+    }
+
+    /// Open a pull request from `branch` in the same repository into `base`.
+    pub async fn create_pull_request(
+        &self,
+        project: &Project,
+        branch: &str,
+        base: &str,
+        title: &str,
+        body: &str,
+    ) -> Result<PullRequest, GhError> {
+        self.gh
+            .post(
+                &format!("{}/pulls", repo_path(project)?),
+                &serde_json::json!({"title": title, "head": branch, "base": base, "body": body}),
+            )
+            .await
     }
 
     /// One browse page of open issues (at most ten), following GitHub's next link.

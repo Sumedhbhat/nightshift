@@ -1,6 +1,11 @@
 mod ui;
 
-use nightshift::storage::{Error, Store};
+use nightshift::{
+    application::{execution::Services, run},
+    codex::CodexCommand,
+    github::GitHub,
+    storage::{Error, Store},
+};
 use std::sync::{Arc, OnceLock};
 
 fn main() {
@@ -21,6 +26,8 @@ fn main() {
     }
     let store = Arc::new(OnceLock::<Store>::new());
     let startup_store = store.clone();
+    let orchestrator = Arc::new(OnceLock::<run::Handle>::new());
+    let startup_orchestrator = orchestrator.clone();
     let (startup_sender, startup_receiver) = tokio::sync::oneshot::channel();
     let startup = runtime.spawn(async move {
         let result = async {
@@ -29,12 +36,28 @@ fn main() {
             let directory = std::env::var_os("NIGHTSHIFT_DATA_DIR")
                 .map(std::path::PathBuf::from)
                 .unwrap_or_else(|| default_data_directory(home.into()));
-            let store = Store::open(directory).await?;
+            let store = Store::open(directory.clone()).await?;
             // Nothing runs before this: interrupt unfinished work and never resume it automatically.
             store.reconcile_after_restart().await?;
             let projects = store.projects().await?;
             let _ = startup_store.set(store.clone());
-            Ok((store, projects))
+            let (updates, receiver) = tokio::sync::mpsc::channel(256);
+            let handle = run::spawn(
+                Services {
+                    store: store.clone(),
+                    github: GitHub::from_env(),
+                    codex: CodexCommand::from_env(),
+                    worktrees_root: directory.join("worktrees"),
+                },
+                updates,
+            );
+            let _ = startup_orchestrator.set(handle.clone());
+            Ok(ui::Started {
+                store,
+                projects,
+                run: handle,
+                updates: receiver,
+            })
         }
         .await;
         let _ = startup_sender.send(result);
@@ -43,6 +66,10 @@ fn main() {
     // Initialization owns a worker too. Finish it before closing, even on an immediate quit.
     if let Err(error) = runtime.block_on(startup) {
         eprintln!("nightshift: history initialization task failed: {error}");
+    }
+    // Quitting stops active executions and records them as interrupted before storage closes.
+    if let Some(orchestrator) = orchestrator.get() {
+        runtime.block_on(orchestrator.shutdown());
     }
     if let Some(store) = store.get()
         && let Err(error) = runtime.block_on(store.clone().close())

@@ -83,3 +83,21 @@ The owner's MacBook Air M3 was not available during this run. Repeat the script 
 - **The replay limits stand as the initial production bounds.** The queue holds 256 events and the cache 2,048 blocks. The largest drain per 33 ms update was 40 events on macOS, well under the 256-message cap. Decision D7 in [decisions.md](decisions.md) records the resulting output limits.
 
 The first launch after a build includes Metal runtime-shader compilation on macOS and cold disk caches on both systems. It is reported separately, as planned.
+
+### Rerun after the complete workflow (milestone 6)
+
+The same scenarios ran on 2026-10-22 against commit `77ca5fc`, which includes the orchestrator, Codex integration, and executions view.
+
+| Measure | macOS CI | Linux dev |
+| --- | --- | --- |
+| Warm launch, exec to first frame, median | 190 ms | 244 ms |
+| First launch after build | 1.59 s | 2.55 s |
+| Frame interval p50 / p95 / p99 | 16.67 / 18.67 / 20.96 ms | 47.2 / 49.2 / 49.9 ms |
+| Empty-window baseline p95 | 18.67 ms | 38.0 ms |
+| Missed frames | 210 of 35,838 (0.6%) | compositor-bound |
+| Action to next render p95 / max | 10.4 / 30.2 ms | 39.4 / 1,744 ms |
+| Replay events received | 119,172 | 119,998 |
+| Stored page load p50 / p95 | 7.7 / 16.3 ms | 8.7 / 15.1 ms |
+| RSS first / peak / last | 56 / 66 / 66 MiB | 105 / 110 / 36 MiB |
+
+The macOS results match milestone 1 within run-to-run variation, and the frame p95 again equals the platform baseline. On Linux, a single 1.8-second stall and the drop in resident memory coincided with host memory pressure. The 5 GB machine had about 1 GB available while other workloads ran, and the kernel reclaimed pages. Every other Linux measure matches milestone 1.

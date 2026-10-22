@@ -36,8 +36,8 @@ Local results are for fast iteration. CI on clean macOS and Linux runners is the
 - [x] 2. Persist projects and execution records (branch `nightshift/m2-storage`)
 - [x] 3. Implement manual issue discovery (branch `nightshift/m3-discovery`)
 - [x] 4. Prepare isolated worktrees (branch `nightshift/m4-worktrees`)
-- [ ] 5. Integrate Codex
-- [ ] 6. Validate the complete workflow
+- [x] 5. Integrate Codex (branch `nightshift/m5-codex`)
+- [x] 6. Validate the complete workflow (branch `nightshift/m6-workflow`)
 
 ## Log
 
@@ -66,3 +66,35 @@ Local results are for fast iteration. CI on clean macOS and Linux runners is the
 - Milestone 4: added `src/git/worktree.rs` (fetch, unique branch and path, worktree, setup, reuse on retry) and a storage-backed `ExecutionRecorder`. Docs are in docs/worktree-preparation.md. Decision D12.
 - Fixed a "text file busy" race in the fake `gh` script test.
 - Local results: fmt passed, Clippy passed, and tests passed (58) in 6 consecutive runs.
+- Milestone 4 PR: https://github.com/Sumedhbhat/nightshift/pull/15 (base `nightshift/m3-discovery`).
+- Milestone 5: added `src/codex/rpc.rs` (JSON-RPC over stdio) and `src/codex/mod.rs` (session, turn, server-request policy, output batching, process stop, prompt). Added `examples/codex_turn.rs`. Decisions D13 and D14.
+- Real runtime, codex-cli 0.162.1, signed in: the handshake response was verified, and a one-file turn completed in 7.8 s. The first interrupt test left a `sleep` running: Codex's sandbox uses new sessions, and the leftover was stopped by hand. After adding descendant and sandbox cleanup, the rerun left nothing.
+- Local results: fmt passed, Clippy passed, and the Codex tests passed (11).
+- Milestone 5 PR: https://github.com/Sumedhbhat/nightshift/pull/16 (base `nightshift/m4-worktrees`).
+
+### 2026-10-21 to 2026-10-22
+
+- Milestone 6 (branch `nightshift/m6-workflow`):
+  - Added the run orchestrator (`src/application/run.rs`) and execution and publication tasks (`src/application/execution.rs`).
+  - Added the executions view, run bar, owner actions, setup command field, and the shutdown hook in `main`. Decisions D15–D17.
+- Found and fixed a race in which a shutdown during a refresh could miss executions that had just entered `working`. Starts are now handed to the actor immediately, and shutdown waits for the in-flight refresh.
+- Workflow tests (`src/application/tests.rs`, 5 tests) run across two projects with bare remotes, a fake `gh`, and a scripted Codex. They passed 4 times in a row. The full suite (74 tests) passed with `-j 2 --test-threads=4`. An earlier run with more parallelism was killed with exit 137, as the 5 GB host ran out of memory.
+- UI check: the release binary ran in a headless GNOME Shell. Screenshots came from the shell's screenshot interface, called by a script holding an allow-listed bus name on the isolated bus, and keys were injected through Mutter's RemoteDesktop interface. The first chord of each injection session is dropped, so scripts send a throwaway Shift first.
+  - A run filled 2 of 2 slots, and both executions pushed to a local bare remote and recorded pull requests.
+  - `Ctrl+Q` during Codex work recorded both as interrupted and released the slots after their processes stopped.
+- Real `gh` checks, read-only: pull-request lookup by head, the repository permission fields, and a dry-run push preflight to `origin`, which created no ref.
+- CI: Build passed on `c3fed10` and `77ca5fc`. Performance passed on `77ca5fc` (run 39658034266).
+- Performance rerun on macOS CI and Linux headless, recorded in docs/foundation-implementation.md.
+- `/tmp` hit its quota again and a background waiter lost its output. Stale scratch files were removed, and new artifacts go to `~/.cache/ns-tmp`.
+
+## Remaining owner validation
+
+These need the owner's GitHub repository or hardware. Nothing else in scope is blocked.
+
+1. **Real GitHub publication end to end.** No test repository, issue, branch, or pull request was created on GitHub, because those are outward-facing changes the owner should choose. To validate:
+   1. In a repository you can push to, create an issue, assign it to yourself, and add the `ready-for-agent` label.
+   2. Add the local checkout in Nightshift. Optionally set a setup command with Ctrl/⌘⇧S.
+   3. Press Ctrl/⌘⇧R. Watch Ctrl/⌘E until the execution reaches "Pull request published".
+   4. Check the branch `nightshift/<issue>-<slug>-<id>` and the pull request on GitHub.
+2. **Reference-machine performance.** Run `sh scripts/perf.sh` on the owner's MacBook Air M3 to replace the CI runner numbers with reference-machine numbers.
+3. **Native keyboard pass on macOS.** Linux was checked with injected keys in a headless shell. A short manual pass on macOS should cover Command shortcuts, Tab order, and the focus rings on the new controls.

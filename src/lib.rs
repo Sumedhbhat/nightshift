@@ -1,4 +1,5 @@
 pub mod application;
+pub mod codex;
 pub mod domain;
 pub mod git;
 pub mod github;
