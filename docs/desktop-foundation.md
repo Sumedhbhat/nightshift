@@ -10,6 +10,7 @@ The MVP includes unattended progression through dependent issues and independent
 
 - Use Rust and GPUI for the macOS application. This is the selected planning direction; the first implementation milestone must verify a standalone build and responsive rendering.
 - Use GPUI entities, declarative views, actions, and its platform event loop. Keep Git, GitHub, database access, and Codex process work outside the UI thread.
+- Use Nightshift's [platform services](platform-services.md) for child-process environments and application data paths. macOS and Linux backends keep OS-specific shell defaults and tool locations out of GitHub and Codex adapters.
 - Build Nightshift's own components and visual design. Refer to Zed's application code for patterns without adopting its editor workspace or entire crate graph.
 - Measure startup, interaction latency, frame time, and memory under concurrent execution output. Using GPUI alone does not establish performance parity with Zed.
 
