@@ -1,4 +1,10 @@
 //! Application commands. The coordinator is the only caller allowed to acquire capacity.
+pub mod execution;
+pub mod run;
+pub mod start;
+#[cfg(test)]
+mod tests;
+
 use crate::{
     domain::{IssueSnapshot, Step},
     storage::{Entry, Result, Store},
@@ -36,5 +42,40 @@ impl Coordinator {
     /// Explicit owner **Retry working**: requires the previous process to be confirmed stopped.
     pub async fn retry_working(&self, execution_id: i64) -> Result<Entry> {
         self.store.retry_working(execution_id, None).await
+    }
+}
+
+/// Saves preparation evidence and output on the execution's storage record.
+pub struct ExecutionRecorder {
+    pub store: Store,
+    pub execution_id: i64,
+}
+
+impl crate::git::worktree::Recorder for ExecutionRecorder {
+    fn evidence(
+        &self,
+        evidence: crate::domain::WorkingEvidence,
+    ) -> crate::github::cli::BoxFuture<'_, std::result::Result<(), String>> {
+        Box::pin(async move {
+            self.store
+                .record_working(self.execution_id, evidence)
+                .await
+                .map(|_| ())
+                .map_err(|error| error.to_string())
+        })
+    }
+
+    fn output(
+        &self,
+        source: crate::domain::OutputSource,
+        text: String,
+    ) -> crate::github::cli::BoxFuture<'_, std::result::Result<(), String>> {
+        Box::pin(async move {
+            self.store
+                .append_output(self.execution_id, source, text)
+                .await
+                .map(|_| ())
+                .map_err(|error| error.to_string())
+        })
     }
 }

@@ -78,3 +78,75 @@ Process output is spooled to storage in batches. If storage fails or its backlog
 **Reason.** Clean CI runners on macOS and Linux build from the pinned Git dependencies with no sibling checkout. The adapter is a few lines, and `gpui_tokio` would pull in Zed's application infrastructure.
 
 **Tradeoff.** Updating GPUI requires re-running the performance scenario and the keyboard checks.
+
+## D9. GitHub CLI adapter shape
+
+**Decision.** Use `gh api` with REST paths for every read and write, so all output is JSON. Probe capabilities by checking `gh api --help` for the flags used and by parsing `gh auth status --json hosts`. Inject a `Runner` trait so tests use an in-memory fake. Never pass `--show-token`.
+
+**Reason.** One command family keeps the probe small and exact. `gh issue` and `gh pr` subcommands print human-oriented output for writes. `gh pr create`, for example, prints only a URL, while `gh api` returns the pull request's number and node ID.
+
+**Tradeoff.** Nightshift builds REST paths itself and must track GitHub REST changes rather than `gh` subcommand changes.
+
+## D10. Inaccessible dependencies and parents
+
+**Decision.** Compare the issue's `issue_dependencies_summary.total_blocked_by` with the blockers the account can list. Any shortfall means a blocker the account cannot see, and the start is blocked. Treat an issue with sub-issues as a parent, and exclude it from execution even when labeled. Read the parent through `parent_issue_url`, which may point to another repository.
+
+**Reason.** The "blocked by" endpoint omits issues the account cannot read. Without the count check, a hidden open blocker would look resolved. Single-issue reads include both summaries; list endpoints return them as null, so candidate lists are re-checked one issue at a time before any start.
+
+**Tradeoff.** One extra read per candidate and per parent at start time.
+
+## D11. Non-interactive push preflight
+
+**Decision.** Run `git push --dry-run --porcelain --no-verify` to a probe ref on the selected remote. Set `GIT_TERMINAL_PROMPT=0`, `GCM_INTERACTIVE=never`, and `SSH_ASKPASS_REQUIRE=never`, with standard input closed. When the owner has not set `GIT_SSH_COMMAND` or `GIT_SSH`, use `ssh -o BatchMode=yes`. Never change Git configuration.
+
+**Reason.** A dry run authenticates against the remote's receive service, so it exposes missing write access or credentials that would need a prompt. It sends no objects and creates no refs.
+
+**Tradeoff.** An owner-configured `core.sshCommand` without batch mode could still prompt on a terminal-attached launch. Overriding it would change owner-managed credential behavior, so Nightshift leaves it alone.
+
+## D12. Worktree location, naming, and setup
+
+**Decision.** Create worktrees under the application data directory in `worktrees/<owner>-<repo>/`. Name branches `nightshift/<issue>-<slug>-<execution-id>`. Run setup with `/bin/sh -c` and a 30-minute timeout. Fetch only the default branch into its remote-tracking ref.
+
+**Reason.** The data directory is outside every checkout and already owned by Nightshift. The execution ID makes names unique across retries, duplicate checkouts, and other accountable owners. A shell command matches how owners write setup steps such as `npm ci && make`.
+
+**Tradeoff.** Worktrees are not next to the project, so editors must open them from the path in the execution details. Updating `refs/remotes/<remote>/<default>` is visible in the owner's repository, which is what any `git fetch` would do.
+
+## D13. Codex sandbox, approvals, and commits
+
+**Decision.** Start threads with `sandbox: workspace-write` and `approvalPolicy: never`, with the worktree as the working directory. Decline approval requests, decline MCP elicitations, and answer every other server request with JSON-RPC error `-32601`. Log each one in the execution output. Codex does not commit; after a completed turn, Nightshift commits the worktree's changes during publication.
+
+**Reason.** The MVP has no conversational intervention, so no request may wait for an answer. `workspace-write` keeps writes inside the worktree. A Git worktree's metadata lives in the owner's repository, outside that sandbox, so Codex could not commit there anyway. Committing outside the sandbox keeps the sandbox tight.
+
+**Tradeoff.** Work that needs network access or writes outside the worktree fails inside the turn, and Codex reports it as a failed command. Owners can do such preparation in the project's setup command, which runs outside the sandbox.
+
+## D14. Process ownership, stop-on-quit, and crashes
+
+**Decision.** One app server per execution, in its own process group, with its PID recorded on the slot attempt. Stopping interrupts the turn and closes stdin. It then signals the group, and finally stops every descendant captured beforehand plus any Codex sandbox process naming the worktree. The slot is released only when all are confirmed gone. After a crash, restart marks the attempt interrupted, keeping its slot. Confirming the stop checks that the recorded PID is still a Codex app server before signaling it, and sweeps sandbox processes for the worktree.
+
+**Reason.** In a real interrupted turn, Codex's sandboxed command outlived the app server, so killing the process group alone would leave owned work running while freeing its slot.
+
+**Tradeoff.** Finding processes by command line is best effort after a crash. A sandboxed command whose wrapper has already exited and that does not mention the worktree cannot be found. The app server itself exits when its standard input closes, which happens when Nightshift dies.
+
+## D15. Refresh schedule and backoff
+
+**Decision.** Refresh every 5 minutes while a run is active, immediately when it starts, and immediately when an execution finishes. After a rate limit or transient GitHub failure, wait 1 minute, doubling each time to at most 30 minutes; a clean refresh resets the delay. Manual refresh runs once without moving the schedule, and requests during a refresh coalesce into one follow-up.
+
+**Reason.** The MVP fixes the interval and asks for backoff without values. Doubling from a minute recovers quickly from short outages while staying well inside GitHub's secondary-limit guidance.
+
+**Tradeoff.** A long outage can delay discovery by up to 30 minutes after GitHub recovers, unless the owner refreshes manually.
+
+## D16. Ending a run and capacity checks
+
+**Decision.** Ending a run stops discovery and new starts but lets active executions finish and publish. A refresh skips gate checks entirely once every slot is reserved.
+
+**Reason.** The MVP lets only owner shutdown or local terminal conditions stop work, and ending a run is not quitting. Skipping checks while full avoids spending GitHub requests on starts that cannot happen.
+
+**Tradeoff.** Ineligible issues are not reported while all slots are busy; they are reported at the next refresh with free capacity.
+
+## D17. Commits, pushes, and pull requests
+
+**Decision.** After a completed turn, Nightshift commits every worktree change with the owner's configured Git identity, using `--no-verify` and `--no-gpg-sign`. It pushes the exact commit to `refs/heads/<branch>` without setting upstream configuration, and reads the remote ref back as evidence. It looks for an existing pull request from the branch before creating one. The pull request body says `Refs #N`, not `Closes #N`. A turn that changes nothing is a retryable error, not a publication.
+
+**Reason.** Owner hooks and signing may prompt or need agents that an unattended run cannot answer. The lookup recovers from a crash between creating the pull request and recording it, without creating a duplicate. The team closes issues after merge, as the MVP describes.
+
+**Tradeoff.** Repositories that require signed commits reject the push; the owner must re-sign and push manually. Owners who want automatic closing must close the issue themselves after merge.

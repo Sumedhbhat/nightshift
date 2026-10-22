@@ -1,5 +1,9 @@
+//! GitHub access through the authenticated GitHub CLI, plus local checkout inspection.
+pub mod cli;
+pub mod eligibility;
+
 use crate::domain::{NewProject, Project};
-use reqwest::Client;
+use cli::{Gh, GhError};
 use serde::Deserialize;
 use std::{path::PathBuf, time::Duration};
 
@@ -20,12 +24,6 @@ pub struct Issue {
 }
 
 #[derive(Default)]
-pub struct IssueResults {
-    pub issues: Vec<Issue>,
-    pub error: Option<String>,
-}
-
-#[derive(Default)]
 pub struct IssuePage {
     pub issues: Vec<Issue>,
     pub next: Option<String>,
@@ -43,22 +41,27 @@ fn valid_segment(value: &str) -> bool {
 
 pub fn parse_remote(value: &str) -> Option<(String, String)> {
     let path = if let Some(path) = value.strip_prefix("git@github.com:") {
-        path.to_owned()
+        path
     } else {
-        let url = reqwest::Url::parse(value).ok()?;
-        if url.host_str()? != "github.com"
-            || !matches!(url.scheme(), "https" | "ssh" | "git")
-            || url.query().is_some()
-            || url.fragment().is_some()
-        {
+        let (scheme, rest) = value.split_once("://")?;
+        if !matches!(scheme, "https" | "ssh" | "git") || rest.contains(['?', '#']) {
             return None;
         }
-        url.path().trim_start_matches('/').to_owned()
+        let (authority, path) = rest.split_once('/')?;
+        let host = authority
+            .rsplit_once('@')
+            .map_or(authority, |(_, host)| host);
+        let host = host
+            .strip_suffix(":443")
+            .or_else(|| host.strip_suffix(":22"))
+            .unwrap_or(host);
+        if !host.eq_ignore_ascii_case("github.com") {
+            return None;
+        }
+        path
     };
-    let path = path
-        .trim_end_matches('/')
-        .strip_suffix(".git")
-        .unwrap_or(path.trim_end_matches('/'));
+    let path = path.trim_end_matches('/');
+    let path = path.strip_suffix(".git").unwrap_or(path);
     let (owner, name) = path.split_once('/')?;
     (valid_segment(owner) && valid_segment(name)).then(|| (owner.to_owned(), name.to_owned()))
 }
@@ -66,7 +69,7 @@ pub fn parse_remote(value: &str) -> Option<(String, String)> {
 async fn git(path: &std::path::Path, args: &[&str]) -> Result<String, String> {
     let output = tokio::time::timeout(
         Duration::from_secs(10),
-        tokio::process::Command::new("/usr/bin/git")
+        tokio::process::Command::new("git")
             .arg("-C")
             .arg(path)
             .args(args)
@@ -75,7 +78,9 @@ async fn git(path: &std::path::Path, args: &[&str]) -> Result<String, String> {
     )
     .await
     .map_err(|_| "Git took too long to inspect this folder.".to_string())?
-    .map_err(|_| "Could not run Git. Install the Xcode command line tools.".to_string())?;
+    .map_err(|_| {
+        "Could not run Git. Install Git (on macOS, the Xcode command line tools).".to_string()
+    })?;
     if !output.status.success() {
         return Err("Choose an initialized Git repository with at least one commit.".into());
     }
@@ -120,8 +125,7 @@ pub async fn inspect_checkout(path: PathBuf) -> Result<Vec<Remote>, String> {
     }
     if unique.is_empty() {
         return Err(
-            "No github.com remote found. Add a public GitHub remote to this repository first."
-                .into(),
+            "No github.com remote found. Add a GitHub remote to this repository first.".into(),
         );
     }
     Ok(unique)
@@ -131,128 +135,112 @@ pub async fn inspect_checkout(path: PathBuf) -> Result<Vec<Remote>, String> {
 struct Owner {
     login: String,
 }
+
 #[derive(Deserialize)]
 struct Repository {
     node_id: String,
     name: String,
     owner: Owner,
-    private: bool,
+    #[serde(default)]
+    default_branch: String,
+    #[serde(default)]
+    archived: bool,
+    #[serde(default)]
+    permissions: Option<Permissions>,
 }
-#[derive(Deserialize)]
-struct Label {
-    name: String,
+
+#[derive(Deserialize, Default, Clone, Copy)]
+struct Permissions {
+    #[serde(default)]
+    push: bool,
 }
+
+#[derive(Deserialize, Clone)]
+pub(crate) struct Label {
+    pub name: String,
+}
+
 #[derive(Deserialize)]
 struct ApiIssue {
     number: u32,
     title: String,
     labels: Vec<Label>,
+    html_url: Option<String>,
     pull_request: Option<serde_json::Value>,
 }
 
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct PullRequestHead {
+    #[serde(rename = "ref")]
+    pub ref_name: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct PullRequest {
+    pub number: u32,
+    pub html_url: String,
+    pub node_id: String,
+    pub head: PullRequestHead,
+}
+
+/// What the active account may do with a repository, checked before each new execution.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RepositoryAccess {
+    pub default_branch: String,
+    pub can_push: bool,
+    pub archived: bool,
+}
+
+pub fn repo_path(project: &Project) -> Result<String, GhError> {
+    if project.github_host != cli::HOST
+        || !valid_segment(&project.owner)
+        || !valid_segment(&project.name)
+    {
+        return Err(GhError::Failed(
+            "Only github.com repositories are supported.".into(),
+        ));
+    }
+    Ok(format!("repos/{}/{}", project.owner, project.name))
+}
+
+/// Repository operations through the authenticated GitHub CLI. No anonymous fallback exists.
 #[derive(Clone)]
 pub struct GitHub {
-    client: Client,
-    base: String,
+    pub gh: Gh,
 }
 
 impl GitHub {
-    pub fn new() -> Result<Self, String> {
-        Ok(Self {
-            client: Client::builder()
-                .user_agent("Nightshift/0.1")
-                .timeout(Duration::from_secs(20))
-                .build()
-                .map_err(|e| e.to_string())?,
-            base: "https://api.github.com".into(),
-        })
+    pub fn new(gh: Gh) -> Self {
+        Self { gh }
     }
 
-    async fn get<T: serde::de::DeserializeOwned>(
-        &self,
-        target: &str,
-    ) -> Result<(T, Option<String>), String> {
-        let base = reqwest::Url::parse(&format!("{}/", self.base.trim_end_matches('/')))
-            .map_err(|_| "GitHub API configuration is invalid.".to_string())?;
-        let url = base
-            .join(target)
-            .map_err(|_| "GitHub returned an invalid pagination link.".to_string())?;
-        if url.scheme() != base.scheme()
-            || url.host_str() != base.host_str()
-            || url.port_or_known_default() != base.port_or_known_default()
-        {
-            return Err("GitHub returned a pagination link for an unexpected host.".into());
-        }
-        let mut response = self
-            .client
-            .get(url)
-            .header("Accept", "application/vnd.github+json")
-            .header("X-GitHub-Api-Version", "2026-03-10")
-            .send()
-            .await
-            .map_err(|_| {
-                "Could not reach GitHub. Check your connection and try Search issues again."
-                    .to_string()
-            })?;
-        let status = response.status();
-        let next = response
-            .headers()
-            .get("link")
-            .and_then(|v| v.to_str().ok())
-            .and_then(|link| {
-                link.split(',')
-                    .find(|part| part.contains("rel=\"next\""))
-                    .and_then(|part| part.split_once('<'))
-                    .and_then(|(_, rest)| rest.split_once('>'))
-                    .map(|(url, _)| url.to_owned())
-            });
-        let mut bytes = Vec::new();
-        while let Some(chunk) = response
-            .chunk()
-            .await
-            .map_err(|_| "GitHub's response was interrupted. Try again.".to_string())?
-        {
-            if bytes.len() + chunk.len() > 8 * 1024 * 1024 {
-                return Err("GitHub's response exceeded the scaffold's 8 MiB page limit.".into());
-            }
-            bytes.extend_from_slice(&chunk);
-        }
-        if !status.is_success() {
-            #[derive(Deserialize)]
-            struct ApiError {
-                message: Option<String>,
-            }
-            let detail = serde_json::from_slice::<ApiError>(&bytes)
-                .ok()
-                .and_then(|error| error.message)
-                .filter(|message| !message.trim().is_empty())
-                .map(|message| format!(" GitHub says: {message}"))
-                .unwrap_or_default();
-            return Err(match status.as_u16() {
-                403 | 429 => format!(
-                    "GitHub denied the request or its public API rate limit was reached. Wait before trying again.{detail}"
-                ),
-                404 => format!(
-                    "Public repository not found. Check the Git remote; private repositories are not supported yet.{detail}"
-                ),
-                status => format!("GitHub returned HTTP {status}.{detail}"),
-            });
-        }
-        let parsed = serde_json::from_slice(&bytes)
-            .map_err(|_| "GitHub returned an unreadable response.".to_string())?;
-        Ok((parsed, next))
+    pub fn from_env() -> Self {
+        Self::new(Gh::from_env())
     }
 
+    /// Admit a public or private repository the active account can access.
     pub async fn verify(&self, remote: Remote) -> Result<NewProject, String> {
-        let (repo, _): (Repository, _) = self
-            .get(&format!("/repos/{}/{}", remote.owner, remote.repo))
-            .await?;
-        if repo.private || !valid_segment(&repo.owner.login) || !valid_segment(&repo.name) {
-            return Err("Only public github.com repositories are supported.".into());
+        self.gh.probe().await.map_err(|e| e.to_string())?;
+        if !valid_segment(&remote.owner) || !valid_segment(&remote.repo) {
+            return Err("The remote does not name a valid GitHub repository.".into());
+        }
+        let repo: Repository = self
+            .gh
+            .get(&format!("repos/{}/{}", remote.owner, remote.repo))
+            .await
+            .map_err(|error| match error {
+                GhError::NotFound(_) => format!(
+                    "{}/{} was not found, or the active GitHub account cannot access it.",
+                    remote.owner, remote.repo
+                ),
+                other => other.to_string(),
+            })?;
+        if !valid_segment(&repo.owner.login) || !valid_segment(&repo.name) {
+            return Err("GitHub returned an unsupported repository name.".into());
         }
         Ok(NewProject {
             checkout_path: remote.checkout,
-            github_host: "github.com".into(),
+            github_host: cli::HOST.into(),
             repository_id: repo.node_id,
             owner: repo.owner.login,
             name: repo.name,
@@ -261,110 +249,108 @@ impl GitHub {
         })
     }
 
-    pub async fn issue_page(
+    /// Re-read access for a start: the repository must still be the enrolled one and writable.
+    pub async fn access(&self, project: &Project) -> Result<RepositoryAccess, GhError> {
+        let repo: Repository = self.gh.get(&repo_path(project)?).await?;
+        if repo.node_id != project.repository_id {
+            return Err(GhError::Failed(format!(
+                "{}/{} now resolves to a different repository than the one added.",
+                project.owner, project.name
+            )));
+        }
+        Ok(RepositoryAccess {
+            default_branch: repo.default_branch,
+            can_push: repo.permissions.unwrap_or_default().push,
+            archived: repo.archived,
+        })
+    }
+
+    /// Whether the issue is open now: the sole publication gate.
+    pub async fn issue_open(&self, project: &Project, number: u32) -> Result<bool, GhError> {
+        #[derive(Deserialize)]
+        struct State {
+            state: String,
+        }
+        let state: State = self
+            .gh
+            .get(&format!("{}/issues/{number}", repo_path(project)?))
+            .await?;
+        Ok(state.state == "open")
+    }
+
+    /// An existing pull request whose head is exactly this repository's `branch`, in any state.
+    pub async fn pull_request_for(
         &self,
         project: &Project,
-        ready_only: bool,
-        cursor: Option<&str>,
-    ) -> IssuePage {
-        let mut result = IssuePage::default();
-        if project.github_host != "github.com"
-            || !valid_segment(&project.owner)
-            || !valid_segment(&project.name)
-        {
-            result.error =
-                Some("This scaffold only supports public github.com repositories.".into());
-            return result;
-        }
-        let target = cursor.map(str::to_owned).unwrap_or_else(|| {
-            let filter = if ready_only {
-                "&labels=ready-for-agent"
-            } else {
-                ""
-            };
-            format!(
-                "/repos/{}/{}/issues?state=open&per_page=10&sort=created&direction=desc{filter}",
-                project.owner, project.name
+        branch: &str,
+    ) -> Result<Option<PullRequest>, GhError> {
+        let pulls: Vec<PullRequest> = self
+            .gh
+            .get(&format!(
+                "{}/pulls?head={}:{branch}&state=all&per_page=10",
+                repo_path(project)?,
+                project.owner
+            ))
+            .await?;
+        Ok(pulls.into_iter().find(|pull| pull.head.ref_name == branch))
+    }
+
+    /// Open a pull request from `branch` in the same repository into `base`.
+    pub async fn create_pull_request(
+        &self,
+        project: &Project,
+        branch: &str,
+        base: &str,
+        title: &str,
+        body: &str,
+    ) -> Result<PullRequest, GhError> {
+        self.gh
+            .post(
+                &format!("{}/pulls", repo_path(project)?),
+                &serde_json::json!({"title": title, "head": branch, "base": base, "body": body}),
             )
-        });
-        match self.get::<Vec<ApiIssue>>(&target).await {
+            .await
+    }
+
+    /// One browse page of open issues (at most ten), following GitHub's next link.
+    pub async fn issue_page(&self, project: &Project, cursor: Option<&str>) -> IssuePage {
+        let mut result = IssuePage::default();
+        let target = match (cursor, repo_path(project)) {
+            (Some(cursor), _) => cursor.to_owned(),
+            (None, Ok(path)) => {
+                format!("{path}/issues?state=open&per_page=10&sort=created&direction=desc")
+            }
+            (None, Err(error)) => {
+                result.error = Some(error.to_string());
+                return result;
+            }
+        };
+        match self.gh.get_page::<Vec<ApiIssue>>(&target).await {
             Ok((issues, next)) => {
                 result.issues = issues
                     .into_iter()
                     .filter(|issue| issue.pull_request.is_none())
                     .map(|issue| Issue {
+                        url: issue.html_url.unwrap_or_else(|| {
+                            format!(
+                                "https://github.com/{}/{}/issues/{}",
+                                project.owner, project.name, issue.number
+                            )
+                        }),
                         number: issue.number,
                         title: issue.title,
                         labels: issue.labels.into_iter().map(|label| label.name).collect(),
-                        url: format!(
-                            "https://github.com/{}/{}/issues/{}",
-                            project.owner, project.name, issue.number
-                        ),
                     })
                     .collect();
                 result.next = next;
             }
-            Err(error) => result.error = Some(error),
+            Err(error) => result.error = Some(error.to_string()),
         }
-        result
-    }
-
-    pub async fn issues(&self, project: &Project, ready_only: bool) -> IssueResults {
-        let mut result = IssueResults::default();
-        if project.github_host != "github.com"
-            || !valid_segment(&project.owner)
-            || !valid_segment(&project.name)
-        {
-            result.error =
-                Some("This scaffold only supports public github.com repositories.".into());
-            return result;
-        }
-        let filter = if ready_only {
-            "&labels=ready-for-agent"
-        } else {
-            ""
-        };
-        let mut target = format!(
-            "/repos/{}/{}/issues?state=open&per_page=100&sort=created&direction=desc{filter}",
-            project.owner, project.name
-        );
-        for _ in 0..100 {
-            match self.get::<Vec<ApiIssue>>(&target).await {
-                Ok((issues, next)) => {
-                    for issue in issues
-                        .into_iter()
-                        .filter(|issue| issue.pull_request.is_none())
-                    {
-                        if result
-                            .issues
-                            .iter()
-                            .any(|other| other.number == issue.number)
-                        {
-                            continue;
-                        }
-                        result.issues.push(Issue {
-                            number: issue.number,
-                            title: issue.title,
-                            labels: issue.labels.into_iter().map(|label| label.name).collect(),
-                            url: format!(
-                                "https://github.com/{}/{}/issues/{}",
-                                project.owner, project.name, issue.number
-                            ),
-                        });
-                    }
-                    let Some(next) = next else { return result };
-                    target = next;
-                }
-                Err(error) => {
-                    result.error = Some(error);
-                    return result;
-                }
-            }
-        }
-        result.error = Some("Stopped after 100 pages. Results are incomplete; use the ready-for-agent filter to narrow the search.".into());
         result
     }
 }
 
+#[cfg(test)]
+pub(crate) mod fake;
 #[cfg(test)]
 mod tests;

@@ -1,6 +1,6 @@
 # Nightshift
 
-A native macOS and Linux scaffold for adding local projects and fetching issues from public GitHub repositories.
+A native macOS and Linux app for adding local projects and fetching their GitHub issues through the GitHub CLI.
 
 ## Install a release
 
@@ -33,15 +33,15 @@ sh scripts/bundle-deb.sh              # Linux: target/release/nightshift-linux-<
 
 ## Use
 
-1. Click **Add project** and select an existing Git repository with at least one commit and a public `github.com` remote.
-2. If its remotes point to different GitHub repositories, choose one.
-3. Click **Search issues**. Nightshift fetches open issues across your added projects, excluding pull requests.
-4. Select a project in the sidebar to view its results. Click an issue to open it on GitHub.
-5. Click **Filter: all open issues** to search only issues labeled `ready-for-agent`. Click again to show all open issues.
+Prerequisites: the GitHub CLI signed in with `gh auth login`, the Codex CLI signed in, and Git push access through your remote's existing SSH or HTTPS setup. Nightshift never signs in or changes credentials by itself.
 
-Projects persist between launches. Issue results are fetched when you search. Public access needs no sign-in; GitHub's unauthenticated API rate limits apply, and failures appear in the window. Private repositories, Codex execution, worktrees, and pull requests are not implemented.
+1. Press Ctrl/⌘O and select a Git repository with at least one commit and a `github.com` remote your GitHub CLI account can access. Choose a remote if several point to different repositories.
+2. Select the project (Ctrl/⌘1–9). Optionally enter a setup command, such as `npm ci`, with Ctrl/⌘⇧S and Enter; it runs in each new worktree before Codex starts.
+3. Browse issues: press `/` to search, then Enter or Ctrl/⌘R to fetch. Search supports `label:`, `-label:`, `repo:`, and quoted phrases.
+4. Press Ctrl/⌘⇧R to start a run. Nightshift works through open issues assigned to you and labeled `ready-for-agent`, up to the concurrency limit (Ctrl/⌘[ and Ctrl/⌘]). Each execution works in its own worktree and branch, and publishes a pull request against the default branch.
+5. Press Ctrl/⌘E to see executions, their evidence, errors, and output. Use Ctrl/⌘⇧T to retry working after an interruption or failure, and Ctrl/⌘⇧P to recheck publication.
 
-Command-O adds a project; Command-R searches; Command-Q quits. On Linux, use Ctrl instead of Command.
+Quitting stops active executions and records them as interrupted. Their worktrees and branches are kept. Review and merge pull requests yourself.
 
 ## Development
 
