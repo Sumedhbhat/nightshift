@@ -35,6 +35,8 @@ sh scripts/bundle-deb.sh              # Linux: target/release/nightshift-linux-<
 
 Prerequisites: the GitHub CLI signed in with `gh auth login`, the Codex CLI signed in, and Git push access through your remote's existing SSH or HTTPS setup. Nightshift never signs in or changes credentials by itself.
 
+Desktop launches load your login-shell environment to find installed tools, including Homebrew and tools in custom `PATH` directories. Reopen Nightshift after changing your shell configuration. See [platform services](docs/platform-services.md) for fallback behavior.
+
 1. Press Ctrl/⌘O and select a Git repository with at least one commit and a `github.com` remote your GitHub CLI account can access. Choose a remote if several point to different repositories.
 2. Select the project (Ctrl/⌘1–9). Optionally enter a setup command, such as `npm ci`, with Ctrl/⌘⇧S and Enter; it runs in each new worktree before Codex starts.
 3. Browse issues: press `/` to search, then Enter or Ctrl/⌘R to fetch. Search supports `label:`, `-label:`, `repo:`, and quoted phrases.

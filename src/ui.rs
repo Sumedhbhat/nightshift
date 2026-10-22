@@ -24,6 +24,7 @@ pub struct Started {
     pub projects: Vec<Project>,
     pub run: nightshift::application::run::Handle,
     pub updates: tokio::sync::mpsc::Receiver<nightshift::application::run::Update>,
+    pub environment_warning: Option<String>,
 }
 
 pub type Startup = tokio::sync::oneshot::Receiver<storage::Result<Started>>;
@@ -179,6 +180,9 @@ impl Nightshift {
                             "Projects loaded. Press / to search, then Enter to fetch from GitHub."
                         }
                         .into();
+                        if let Some(warning) = started.environment_warning {
+                            this.status.push_str(&format!(" {warning}"));
+                        }
                     }
                     Ok(Err(error)) => this.status = format!("Could not load projects: {error}"),
                     Err(_) => {

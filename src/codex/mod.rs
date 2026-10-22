@@ -80,10 +80,11 @@ pub struct CodexCommand {
 }
 
 impl CodexCommand {
-    /// `NIGHTSHIFT_CODEX` overrides the executable; otherwise `codex` on PATH.
+    /// `NIGHTSHIFT_CODEX` overrides the executable; otherwise use the platform command search path.
     pub fn from_env() -> Self {
         Self {
-            program: std::env::var_os("NIGHTSHIFT_CODEX")
+            program: crate::platform::current()
+                .var_os("NIGHTSHIFT_CODEX")
                 .map(PathBuf::from)
                 .unwrap_or_else(|| "codex".into()),
             args: vec!["app-server".into()],
@@ -102,7 +103,7 @@ impl Session {
     /// Spawn the app server in its own process group so stop can reach its children.
     pub fn spawn(codex: &CodexCommand, cwd: &Path) -> Result<Self, CodexError> {
         let program = &codex.program;
-        let mut command = tokio::process::Command::new(program);
+        let mut command = crate::platform::command(program);
         command
             .args(&codex.args)
             .current_dir(cwd)
@@ -460,7 +461,7 @@ impl Session {
 
 /// Every live descendant of `root`, from one `ps` snapshot.
 pub async fn descendants(root: u32) -> Vec<u32> {
-    let Ok(output) = tokio::process::Command::new("ps")
+    let Ok(output) = crate::platform::command("ps")
         .args(["-A", "-o", "pid=,ppid="])
         .output()
         .await
@@ -490,7 +491,7 @@ pub async fn descendants(root: u32) -> Vec<u32> {
 /// Codex sandbox wrappers whose command line names this worktree, and their descendants.
 /// They survive their app server, so this finds them after a crash too.
 pub async fn sandbox_processes(worktree: &Path) -> Vec<u32> {
-    let Ok(output) = tokio::process::Command::new("ps")
+    let Ok(output) = crate::platform::command("ps")
         .args(["-A", "-o", "pid=,args="])
         .output()
         .await
@@ -520,7 +521,7 @@ pub async fn sandbox_processes(worktree: &Path) -> Vec<u32> {
 }
 
 async fn alive(pid: u32) -> bool {
-    tokio::process::Command::new("kill")
+    crate::platform::command("kill")
         .args(["-0", &pid.to_string()])
         .stdin(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -560,7 +561,7 @@ pub async fn stop_processes(pids: &[u32]) -> bool {
 }
 
 async fn signal_pid(pid: u32, signal: &str) {
-    let _ = tokio::process::Command::new("kill")
+    let _ = crate::platform::command("kill")
         .arg(format!("-{signal}"))
         .arg(pid.to_string())
         .stdin(std::process::Stdio::null())
@@ -572,7 +573,7 @@ async fn signal_pid(pid: u32, signal: &str) {
 
 /// Send a signal to a process group with the system `kill`, avoiding unsafe FFI.
 async fn signal_group(pid: u32, signal: &str) {
-    let _ = tokio::process::Command::new("kill")
+    let _ = crate::platform::command("kill")
         .arg(format!("-{signal}"))
         .arg("--")
         .arg(format!("-{pid}"))
@@ -586,7 +587,7 @@ async fn signal_group(pid: u32, signal: &str) {
 /// Whether `pid` is a live Codex app server, used after a crash to decide if work is stopped.
 /// A reused PID that belongs to another program counts as stopped.
 pub async fn is_live_app_server(pid: u32) -> bool {
-    let output = tokio::process::Command::new("ps")
+    let output = crate::platform::command("ps")
         .args(["-o", "command=", "-p", &pid.to_string()])
         .output()
         .await;

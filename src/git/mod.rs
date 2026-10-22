@@ -15,7 +15,7 @@ pub struct GitOutput {
 /// Build a non-interactive Git command. If the owner has not configured an SSH command, use
 /// OpenSSH batch mode so a passphrase or host-key prompt fails instead of waiting.
 pub fn command(directory: &Path) -> tokio::process::Command {
-    let mut command = tokio::process::Command::new("git");
+    let mut command = crate::platform::command("git");
     command
         .arg("-C")
         .arg(directory)
@@ -26,7 +26,11 @@ pub fn command(directory: &Path) -> tokio::process::Command {
         .env("LC_ALL", "C")
         .stdin(std::process::Stdio::null())
         .kill_on_drop(true);
-    if std::env::var_os("GIT_SSH_COMMAND").is_none() && std::env::var_os("GIT_SSH").is_none() {
+    if crate::platform::current()
+        .var_os("GIT_SSH_COMMAND")
+        .is_none()
+        && crate::platform::current().var_os("GIT_SSH").is_none()
+    {
         command.env("GIT_SSH_COMMAND", "ssh -o BatchMode=yes");
     }
     command

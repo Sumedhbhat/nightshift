@@ -18,7 +18,7 @@ pub struct CommandOutput {
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum GhError {
     #[error(
-        "GitHub CLI (gh) is not installed. Install it and run `gh auth login` outside Nightshift."
+        "GitHub CLI (gh) was not found in Nightshift's command search path. Install it or add its directory to your shell's PATH, then reopen Nightshift. Run `gh auth login` outside Nightshift if needed."
     )]
     NotInstalled,
     #[error("GitHub CLI is not signed in to github.com. Run `gh auth login` outside Nightshift.")]
@@ -77,10 +77,11 @@ impl Subprocess {
         }
     }
 
-    /// `NIGHTSHIFT_GH` overrides the executable for isolated testing; otherwise `gh` on PATH.
+    /// `NIGHTSHIFT_GH` overrides the executable; otherwise use the platform's command search path.
     pub fn from_env() -> Self {
         Self::new(
-            std::env::var_os("NIGHTSHIFT_GH")
+            crate::platform::current()
+                .var_os("NIGHTSHIFT_GH")
                 .map(PathBuf::from)
                 .unwrap_or_else(|| "gh".into()),
         )
@@ -95,7 +96,7 @@ impl Runner for Subprocess {
     ) -> BoxFuture<'a, GhResult<CommandOutput>> {
         Box::pin(async move {
             use tokio::io::AsyncWriteExt;
-            let mut command = tokio::process::Command::new(&self.program);
+            let mut command = crate::platform::command(&self.program);
             command
                 .args(&args)
                 // Non-interactive, uncolored, unpaged, and no update checks.

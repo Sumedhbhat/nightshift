@@ -150,3 +150,11 @@ Process output is spooled to storage in batches. If storage fails or its backlog
 **Reason.** Owner hooks and signing may prompt or need agents that an unattended run cannot answer. The lookup recovers from a crash between creating the pull request and recording it, without creating a duplicate. The team closes issues after merge, as the MVP describes.
 
 **Tradeoff.** Repositories that require signed commits reject the push; the owner must re-sign and push manually. Owners who want automatic closing must close the issue themselves after merge.
+
+## D18. Platform services and CLI discovery
+
+**Decision.** Use a shared `Platform` service with macOS and Linux backends for child environments and application data paths. Capture the owner's interactive login-shell environment once during background startup, bound it by time and output size, and pass an immutable snapshot explicitly to subprocesses. Preserve launch-provided application controls and data paths. Append platform-specific fallback tool directories and report capture failures in the startup status. See [platform services](platform-services.md).
+
+**Reason.** A desktop-launched app can have a smaller `PATH` than a terminal. On the affected Mac, `/opt/homebrew/bin/gh` was installed and authenticated, but Nightshift's inherited `PATH` omitted `/opt/homebrew/bin`. Fixing only the `gh` executable would still leave Codex script runtimes, Git credential helpers, and setup commands unable to find their dependencies. Zed's login-shell capture addresses the same boundary.
+
+**Tradeoff.** Shell startup files run once and may delay tool readiness by up to five seconds. The window remains responsive. Failed capture uses inherited and standard tool locations; custom profile-only locations may remain unavailable until the owner repairs the shell and reopens Nightshift. Process-wide environment mutation is avoided because Tokio and GPUI are already multithreaded.

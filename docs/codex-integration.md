@@ -14,6 +14,8 @@ This implements milestone 5 of the [implementation plan](implementation-plan.md)
 
 `codex::Session` runs one app server per execution:
 
+Executable lookup and the app server's child environment come from [platform services](platform-services.md), including the login-shell `PATH` needed by script-based installations. `NIGHTSHIFT_CODEX` overrides the executable.
+
 1. **Handshake.** `initialize` with client info `nightshift`, then the `initialized` notification. Each request has a 30-second timeout.
 2. **Thread.** `thread/start` runs with the worktree as `cwd`, `sandbox: workspace-write`, and `approvalPolicy: never`. A retry with a saved thread ID uses `thread/resume` instead. The thread ID is saved immediately.
 3. **Turn.** `turn/start` sends the prompt. Its response only acknowledges the start, and events may arrive before it. The turn ID is saved from `turn/started` or the acknowledgement, whichever comes first.

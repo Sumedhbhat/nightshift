@@ -3259,6 +3259,7 @@ version = "0.1.0"
 dependencies = [
  "gpui",
  "gpui_platform",
+ "libc",
  "rusqlite",
  "serde",
  "serde_json",
