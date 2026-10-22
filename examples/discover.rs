@@ -1,13 +1,14 @@
-//! Read-only GitHub smoke check. Saved projects go into a temporary database.
+//! Read-only GitHub CLI smoke check. Saved projects go into a temporary database.
 use nightshift::{
-    github::{GitHub, inspect_checkout},
+    github::{GitHub, eligibility, inspect_checkout},
     storage::Store,
 };
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let checkout = std::env::args_os()
         .nth(1)
-        .ok_or("Usage: cargo run --example discover -- /path/to/repository")?;
+        .ok_or("Usage: cargo run --example discover -- /path/to/repository [issue-number]")?;
+    let issue: Option<u32> = std::env::args().nth(2).map(|n| n.parse()).transpose()?;
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;
@@ -20,12 +21,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "Choose a repository with one distinct GitHub remote for this smoke check.".into(),
             );
         }
-        let github = GitHub::new()?;
+        let github = GitHub::from_env();
+        let account = github.gh.probe().await?;
+        println!("GitHub CLI signed in as {}", account.login);
         let project = store
             .add_project(github.verify(remotes.into_iter().next().unwrap()).await?)
             .await?;
         assert_eq!(store.projects().await?, vec![project.clone()]);
-        let results = github.issues(&project, false).await;
+        let results = github.issue_page(&project, None).await;
         println!(
             "{}/{}: {} open issues",
             project.owner,
@@ -34,6 +37,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
         for issue in results.issues.iter().take(5) {
             println!("#{} {}", issue.number, issue.title);
+        }
+        if let Some(number) = issue {
+            let result = eligibility::check(&github.gh, &project, number, &account.login).await;
+            println!("#{number} eligible: {}", result.eligible());
+            for blocker in &result.blockers {
+                println!(
+                    "  blocked by {}#{} open={} reason={:?}",
+                    blocker.repository, blocker.number, blocker.open, blocker.state_reason
+                );
+            }
+            for problem in &result.problems {
+                println!("  {}", problem.describe());
+            }
         }
         store.close().await?;
         if let Some(error) = results.error {

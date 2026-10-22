@@ -24,9 +24,9 @@ Keep the workflow graph and step policies compile-time typed for the MVP. Persis
 
 Model recoverable failure orthogonally to workflow position. Persist the current step, attempted transition, structured error, evidence already obtained, and whether owner retry is available. Do not move to a generic `failed` workflow state. On explicit retry, rerun only that transition and atomically clear the error when saving success. Reserve terminal states for interruption or unrecoverable local process outcomes.
 
-The existing storage enum (`preparing`, `running`, `interrupted`, `failed`) is foundation state and cannot express this target workflow. Add a forward SQLite migration and update the domain model rather than overloading the existing values. Preserve immutable issue snapshots and the audit history through migration.
+Schema 2 replaces the foundation's `preparing`/`running`/`interrupted`/`failed` enum with this workflow through a forward migration that preserves snapshots and audit history. See [storage-implementation.md](storage-implementation.md).
 
-The [public issue discovery scaffold](public-issue-discovery.md) now supports adding local projects and fetching public GitHub issues. It does not implement run eligibility or execution.
+[Issue discovery](public-issue-discovery.md) adds local projects and evaluates start eligibility through the GitHub CLI. [Workflow orchestration](workflow-orchestration.md) implements runs, executions, and publication.
 
 ## Independent execution and dependency rules
 
@@ -50,7 +50,7 @@ Treat multiple assignees as independent accountable owners. Membership of the ac
 
 Check readiness from current label presence only. Do not fetch label-event history or require the run owner to have applied the label.
 
-Reserve global execution capacity and prevent duplicate active work on the same issue. Eligible siblings may execute concurrently. Do not reserve a parent-wide slot or build on another execution's branch. The current storage schema still enforces a parent-wide slot; remove that constraint in a forward migration and update its tests before claiming this workflow is implemented.
+Reserve global execution capacity and prevent duplicate active work on the same issue. Eligible siblings may execute concurrently. Do not reserve a parent-wide slot or build on another execution's branch.
 
 For a same-repository dependency P on Q, do not start P while Q remains open. Reevaluate P after GitHub reports Q closed. Dependencies across repositories follow the same closure gate.
 
@@ -182,16 +182,28 @@ Use release builds on a named reference Mac. Record hardware, macOS, display ref
 
 Use Instruments Time Profiler and Allocations to diagnose stalls and memory growth. Instrument command receipt, persistence, UI event delivery, and rendering. Separate network completion time from immediate UI feedback. Compare equivalent launch and navigation measurements with Zed on the same machine if a relative comparison is useful; do not compare a Nightshift issue list with a Zed indexing workload.
 
-## Implementation milestones, pending orchestration revision
+## Implementation milestones
 
-1. **Prove the GPUI foundation.** Create the Rust package, pin compatible dependencies, and render a native macOS window with text, focus, actions, and a virtualized list. Replay two synthetic output streams off the UI thread. Measure startup, frames, and memory before adding external integration. Exit when the build is reproducible without sibling checkouts and the UI remains responsive.
-2. **Persist projects and execution records.** Add migrations, the storage worker, coordinator, and state rules. Test simultaneous starts up to the configured limit, rejection of additional starts, duplicates across checkouts, failed transactions, and saved-description immutability.
-3. **Implement manual issue discovery.** Add repository identification, authenticated GitHub access, pagination, and readiness validation. List only open issues assigned to the active account as candidates; fetch closed issues only for parent or dependency evaluation. Verify missing labels, open blockers, blockers with each supported closure reason, absent closure reasons, inaccessible dependencies, partial search failures, and stale-result handling. Confirm a completed local execution cannot satisfy an open GitHub dependency.
-4. **Prepare isolated worktrees.** Use temporary Git repositories to verify default-branch fetches, unique branch/path creation, setup failure, and an unchanged original checkout. Record partial failures without automatic cleanup.
-5. **Integrate Codex.** Test a fake stdio server for handshake, out-of-order responses, output bursts, terminal statuses, unsupported requests, and abrupt exit. Then validate one owner-started execution using the real installed runtime. Resolve runtime permissions and process shutdown before this step.
-6. **Validate the complete workflow.** Run executions across projects up to the configured limit, verify additional and duplicate starts are blocked, and confirm completion never triggers another search or execution. Re-run the defined performance scenarios and document results.
+Revised on 2026-10-20 for the orchestration scope above. Progress, commands, and evidence are logged in [overnight-progress.md](overnight-progress.md); routine choices are in [decisions.md](decisions.md). A milestone is complete only when its exit evidence is recorded.
 
-The native foundation now has build and test commands in [AGENTS.md](../AGENTS.md). Milestone 1 remains open until its performance validation is complete. Later milestones still require revision for the current orchestration scope.
+1. **Prove and finish the GPUI foundation.**
+   - Done before this revision: Rust package with pinned `gpui`/`gpui_platform` revision and toolchain, native window, text, focus, actions, virtualized issue list, and an off-UI-thread synthetic replay with bounded queue and cache tests.
+   - Remaining: add a repeatable performance scenario to the release binary covering startup, frame intervals during scrolling with two 100 events/second replay streams, action-to-render latency, a 100,000-block stored output list paged from SQLite, and RSS sampled over ten minutes. Run it on Linux and on a clean macOS runner. Record the setup and results.
+   - Exit: a clean-runner build without sibling checkouts, plus recorded measurements against the budgets in the performance section, or recorded deviations with their causes.
+   - Status: complete. Measurements and the one recorded deviation are in [foundation-implementation.md](foundation-implementation.md#performance-validation).
+2. **Persist projects and execution records.**
+   - Done before this revision: migration 1, the dedicated database worker, instance lock, a capacity-reservation coordinator, immutable snapshots, audit events, bounded output, and 13 storage tests.
+   - Remaining: a forward migration to the typed workflow (`checking`, `working`, `branch_published`, `pull_request_published`) with step policies, step errors, attempts, process ownership, worktree and publication evidence, and a persisted concurrency-limit setting. Remove the parent-wide slot. Orchestrator-owned capacity acquisition on entry to slot-consuming steps.
+   - Exit tests: simultaneous starts up to the limit, rejection beyond it, duplicates across checkouts, failed transactions leaving no partial state, saved-description immutability, policy-derived capacity behavior, and interrupted executions holding capacity until termination is confirmed.
+   - Status: complete. See [storage-implementation.md](storage-implementation.md).
+3. **Implement manual issue discovery.**
+   - Done before this revision: local project inspection, remote parsing, and an anonymous public-issue scaffold with search and pagination.
+   - Remaining: replace the anonymous client with a `gh` adapter that uses structured output, probes required commands and fields, never reads the token, and never falls back to anonymous requests. Admit public and private repositories the active account can access. List open issues assigned to the active account. Evaluate readiness: own label, parent label and state, direct and inherited "blocked by" dependencies, closed-only blocker resolution. Check direct push capability non-destructively.
+   - Exit tests with a fake `gh`: missing labels, open blockers, blockers closed for each reason, absent closure reasons, inaccessible dependencies, partial search failures, stale results, incompatible or logged-out CLI, account switch, and a completed local execution not satisfying an open dependency.
+   - Status: complete. See [public-issue-discovery.md](public-issue-discovery.md#start-eligibility).
+4. **Prepare isolated worktrees.** Fetch the default branch from the selected remote, record the fetched commit, create a unique branch and worktree outside the checkout, and run optional setup with captured output. Exit tests use temporary repositories: default-branch fetch, unique names, setup failure, unchanged original checkout, and partial failures recorded without cleanup. Status: complete. See [worktree-preparation.md](worktree-preparation.md).
+5. **Integrate Codex.** A Rust JSON-RPC client for `codex app-server` over stdio with request correlation, continuous stdout and stderr draining, and defined responses to unsupported server requests. Exit tests against a fake stdio server: handshake, out-of-order responses, output bursts, terminal statuses, unsupported requests, and abrupt exit. Then one owner-started real execution with the installed runtime, with process shutdown and permissions recorded. Status: complete. See [codex-integration.md](codex-integration.md).
+6. **Validate the complete workflow.** The run loop, refresh schedule, publication (`git push` and `gh pr create`), **Recheck publication**, **Retry working**, stop-on-quit, and the execution views. Exit: executions across projects up to the limit, additional and duplicate starts blocked, completion triggering no extra search or execution, and the performance scenarios rerun. See [workflow-orchestration.md](workflow-orchestration.md).
 
 ## Decisions to settle during implementation
 

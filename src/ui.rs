@@ -1,4 +1,8 @@
+mod executions;
+mod perf_view;
 mod text_input;
+
+pub use perf_view::{PerfConfig, run as run_perf};
 
 use gpui::{
     App, Bounds, Context, FocusHandle, Focusable, KeyBinding, PathPromptOptions, Role, Task,
@@ -14,7 +18,15 @@ use std::collections::HashMap;
 use text_input::TextInput;
 use tokio::runtime::Handle;
 
-pub type Startup = tokio::sync::oneshot::Receiver<storage::Result<(Store, Vec<Project>)>>;
+/// What startup hands the window once storage and the orchestrator are running.
+pub struct Started {
+    pub store: Store,
+    pub projects: Vec<Project>,
+    pub run: nightshift::application::run::Handle,
+    pub updates: tokio::sync::mpsc::Receiver<nightshift::application::run::Update>,
+}
+
+pub type Startup = tokio::sync::oneshot::Receiver<storage::Result<Started>>;
 const BG: u32 = 0x18212c;
 const PANEL: u32 = 0x202c39;
 const LINE: u32 = 0x354352;
@@ -37,7 +49,14 @@ actions!(
         Activate,
         NextIssue,
         PreviousIssue,
-        OpenIssue
+        OpenIssue,
+        ShowExecutions,
+        ToggleRun,
+        RetryWorking,
+        RecheckPublication,
+        DecreaseLimit,
+        IncreaseLimit,
+        FocusSetup
     ]
 );
 
@@ -88,13 +107,40 @@ struct Nightshift {
     _picker: Option<Task<()>>,
     _save: Option<Task<()>>,
     _search: Option<Task<()>>,
+    startup_report: Option<StartupReport>,
+    executions: executions::Executions,
+    setup_input: gpui::Entity<TextInput>,
+    _updates: Option<Task<()>>,
+    _output_poll: Option<Task<()>>,
+}
+
+/// Written when `NIGHTSHIFT_STARTUP_REPORT` names a file; the app then quits after its first
+/// frame and project load. Used by `scripts/perf.sh` for repeated launch measurements.
+struct StartupReport {
+    path: std::path::PathBuf,
+    main_started: std::time::Instant,
+    first_render_ms: Option<f64>,
+    first_frame_ms: Option<f64>,
+    first_frame_unix_ms: Option<u128>,
+    projects_loaded_ms: Option<f64>,
+    written: bool,
 }
 
 impl Nightshift {
-    fn new(window: &mut Window, runtime: Handle, startup: Startup, cx: &mut Context<Self>) -> Self {
+    fn new(
+        window: &mut Window,
+        runtime: Handle,
+        startup: Startup,
+        main_started: std::time::Instant,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let focus = cx.focus_handle();
         focus.focus(window, cx);
         let search_input = cx.new(TextInput::new);
+        let setup_input = cx.new(|cx| {
+            TextInput::new(cx)
+                .with_placeholder("Optional setup command run in each new worktree, e.g. npm ci")
+        });
         let input_subscription = cx.observe(&search_input, |this, input, cx| {
             let text = input.read(cx).text();
             if this.query_text != text {
@@ -118,10 +164,15 @@ impl Nightshift {
             let result = startup.await;
             let _ = this.update(cx, |this, cx| {
                 this.busy = false;
+                if let Some(report) = &mut this.startup_report {
+                    report.projects_loaded_ms =
+                        Some(nightshift::perf::elapsed_ms(report.main_started));
+                }
                 match result {
-                    Ok(Ok((store, projects))) => {
-                        this.store = Some(store);
-                        this.projects = projects;
+                    Ok(Ok(started)) => {
+                        this.store = Some(started.store);
+                        this.projects = started.projects;
+                        this.listen(started.run, started.updates, cx);
                         this.status = if this.projects.is_empty() {
                             "Add a project to get started."
                         } else {
@@ -160,7 +211,60 @@ impl Nightshift {
             _picker: None,
             _save: None,
             _search: None,
+            executions: Default::default(),
+            setup_input,
+            _updates: None,
+            _output_poll: None,
+            startup_report: std::env::var_os("NIGHTSHIFT_STARTUP_REPORT").map(|path| {
+                StartupReport {
+                    path: path.into(),
+                    main_started,
+                    first_render_ms: None,
+                    first_frame_ms: None,
+                    first_frame_unix_ms: None,
+                    projects_loaded_ms: None,
+                    written: false,
+                }
+            }),
         }
+    }
+
+    fn record_startup(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(report) = &mut self.startup_report else {
+            return;
+        };
+        if report.first_render_ms.is_none() {
+            report.first_render_ms = Some(nightshift::perf::elapsed_ms(report.main_started));
+            let entity = cx.entity().downgrade();
+            window.on_next_frame(move |_, cx| {
+                let _ = entity.update(cx, |this, cx| {
+                    if let Some(report) = &mut this.startup_report {
+                        report.first_frame_ms =
+                            Some(nightshift::perf::elapsed_ms(report.main_started));
+                        report.first_frame_unix_ms =
+                            Some(nightshift::perf::unix_ms(std::time::SystemTime::now()));
+                    }
+                    cx.notify();
+                });
+            });
+        }
+        if report.written || report.first_frame_ms.is_none() || report.projects_loaded_ms.is_none()
+        {
+            return;
+        }
+        report.written = true;
+        let json = serde_json::json!({
+            "version": nightshift::VERSION,
+            "os": std::env::consts::OS,
+            "main_to_first_render_ms": report.first_render_ms,
+            "main_to_first_frame_ms": report.first_frame_ms,
+            "main_to_projects_loaded_ms": report.projects_loaded_ms,
+            "first_frame_unix_ms": report.first_frame_unix_ms,
+        });
+        if let Err(error) = std::fs::write(&report.path, json.to_string()) {
+            eprintln!("nightshift: could not write startup report: {error}");
+        }
+        cx.defer(|cx| cx.quit());
     }
 
     fn select_project(
@@ -177,6 +281,15 @@ impl Nightshift {
             return;
         };
         self.selected = selected;
+        self.executions.view = executions::View::Issues;
+        let setup = self
+            .projects
+            .iter()
+            .find(|p| Some(p.id) == selected)
+            .and_then(|p| p.setup_command.clone())
+            .unwrap_or_default();
+        self.setup_input
+            .update(cx, |input, cx| input.set_text(&setup, cx));
         self.focus.focus(window, cx);
         self.active_issue = None;
         self.issue_scroll
@@ -185,6 +298,11 @@ impl Nightshift {
     }
 
     fn move_issue(&mut self, forward: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if self.executions.view == executions::View::Executions {
+            self.focus.focus(window, cx);
+            self.move_execution(forward, cx);
+            return;
+        }
         let visible = self.visible_issues();
         if visible.is_empty() {
             return;
@@ -211,7 +329,7 @@ impl Nightshift {
         }
         self.busy = true;
         self.remotes.clear();
-        self.status = "Choose a local Git repository linked to a public GitHub repo.".into();
+        self.status = "Choose a local Git repository with a GitHub remote.".into();
         let picker = cx.prompt_for_paths(PathPromptOptions {
             files: false,
             directories: true,
@@ -279,12 +397,9 @@ impl Nightshift {
         }
         self.busy = true;
         self.remotes.clear();
-        self.status = format!(
-            "Checking public repository {}/{}…",
-            remote.owner, remote.repo
-        );
+        self.status = format!("Checking {}/{} with GitHub CLI…", remote.owner, remote.repo);
         let work = self.runtime.spawn(async move {
-            let project = GitHub::new()?.verify(remote).await?;
+            let project = GitHub::from_env().verify(remote).await?;
             store.add_project(project).await.map_err(|e| e.to_string())
         });
         self._save = Some(cx.spawn(async move |this, cx| {
@@ -310,6 +425,39 @@ impl Nightshift {
         cx.notify();
     }
 
+    fn save_setup(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let (Some(store), Some(id)) = (self.store.clone(), self.selected) else {
+            return;
+        };
+        let text = self.setup_input.read(cx).text().trim().to_owned();
+        let command = (!text.is_empty()).then_some(text);
+        let saved = command.clone();
+        let work = self
+            .runtime
+            .spawn(async move { store.set_setup_command(id, saved).await });
+        self.focus.focus(window, cx);
+        cx.spawn(async move |this, cx| {
+            let result = work.await;
+            let _ = this.update(cx, |this, cx| {
+                match result {
+                    Ok(Ok(())) => {
+                        if let Some(project) = this.projects.iter_mut().find(|p| p.id == id) {
+                            project.setup_command = command.clone();
+                        }
+                        this.status = match command {
+                            Some(command) => format!("Setup command saved: {command}. It runs in each new worktree before Codex."),
+                            None => "Setup command cleared.".into(),
+                        };
+                    }
+                    Ok(Err(error)) => this.status = format!("Could not save the setup command: {error}"),
+                    Err(error) => this.status = format!("Could not save the setup command: {error}"),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
     fn visible_issues(&self) -> Vec<usize> {
         let Ok(query) = &self.query else {
             return vec![];
@@ -325,7 +473,16 @@ impl Nightshift {
             .collect()
     }
 
-    fn search(&mut self, _: &SearchIssues, _: &mut Window, cx: &mut Context<Self>) {
+    fn search(&mut self, _: &SearchIssues, window: &mut Window, cx: &mut Context<Self>) {
+        // Enter in the setup field saves it; Enter in search or Cmd-R refreshes issues.
+        if self.setup_input.focus_handle(cx).is_focused(window) {
+            self.save_setup(window, cx);
+            return;
+        }
+        if self.executions.view == executions::View::Executions {
+            self.refresh_run(cx);
+            return;
+        }
         self.fetch_issues(false, cx);
     }
 
@@ -370,8 +527,8 @@ impl Nightshift {
         };
         let project_id = project.id;
         let work = self.runtime.spawn(async move {
-            let github = GitHub::new()?;
-            Ok::<_, String>(github.issue_page(&project, false, cursor.as_deref()).await)
+            let github = GitHub::from_env();
+            Ok::<_, String>(github.issue_page(&project, cursor.as_deref()).await)
         });
         self._search = Some(cx.spawn(async move |this, cx| {
             let result = work.await;
@@ -446,6 +603,7 @@ fn button(
 
 impl Render for Nightshift {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.record_startup(window, cx);
         let visible = self.visible_issues();
         let count = visible.len();
         let scope_fetched = self.selected.map_or(self.issues.len(), |id| {
@@ -467,6 +625,29 @@ impl Render for Nightshift {
             .map(|p| format!("{}/{}", p.owner, p.name))
             .unwrap_or_else(|| "All projects".into());
         let searching = self.search_input.focus_handle(cx).is_focused(window);
+        let in_executions = self.executions.view == executions::View::Executions;
+        let run_bar = self.render_run_bar(cx).into_any_element();
+        let executions_view = in_executions.then(|| self.render_executions(cx));
+        let setup_row = self.selected.map(|_| {
+            div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .text_xs()
+                .child(
+                    div()
+                        .flex_none()
+                        .text_color(rgb(MUTED))
+                        .child(format!("Setup  {MODIFIER}⇧S")),
+                )
+                .child(div().flex_1().min_w_0().child(self.setup_input.clone()))
+                .child(
+                    div()
+                        .flex_none()
+                        .text_color(rgb(MUTED))
+                        .child("Enter saves"),
+                )
+        });
         let empty: String = if self.projects.is_empty() {
             format!("Add a local project with {MODIFIER}O to get started.")
         } else if self.query.is_err() {
@@ -506,8 +687,23 @@ impl Render for Nightshift {
             .on_action(cx.listener(|this, _: &NextIssue, window, cx| this.move_issue(true, window, cx)))
             .on_action(cx.listener(|this, _: &PreviousIssue, window, cx| this.move_issue(false, window, cx)))
             .on_action(cx.listener(|this, _: &OpenIssue, _, cx| {
-                if let Some(row) = this.active_issue.and_then(|index| this.issues.get(index)) {
+                if this.executions.view == executions::View::Executions {
+                    this.open_pull_request(cx);
+                } else if let Some(row) = this.active_issue.and_then(|index| this.issues.get(index)) {
                     cx.open_url(&row.issue.url);
+                }
+            }))
+            .on_action(cx.listener(|this, _: &ShowExecutions, window, cx| this.show_executions(window, cx)))
+            .on_action(cx.listener(|this, _: &ToggleRun, _, cx| this.toggle_run(cx)))
+            .on_action(cx.listener(|this, _: &RetryWorking, _, cx| this.retry_working(cx)))
+            .on_action(cx.listener(|this, _: &RecheckPublication, _, cx| this.recheck_publication(cx)))
+            .on_action(cx.listener(|this, _: &DecreaseLimit, _, cx| this.change_limit(-1, cx)))
+            .on_action(cx.listener(|this, _: &IncreaseLimit, _, cx| this.change_limit(1, cx)))
+            .on_action(cx.listener(|this, _: &FocusSetup, window, cx| {
+                if this.selected.is_some() {
+                    this.executions.view = executions::View::Issues;
+                    this.setup_input.focus_handle(cx).focus(window, cx);
+                    cx.notify();
                 }
             }))
             .on_action(|_: &Close, window, _| window.remove_window())
@@ -520,19 +716,29 @@ impl Render for Nightshift {
                     .child(div().px_5().py_5().flex().items_baseline().gap_2()
                         .child(div().font_family("Avenir Next").text_xl().child("Nightshift"))
                         .child(div().text_xs().text_color(rgb(MUTED)).child(nightshift::VERSION)))
+                    .child(div().id("show-executions").role(Role::Button).aria_label(format!("Executions, {MODIFIER_NAME} E"))
+                        .focusable().tab_stop(true).key_context("Selectable")
+                        .border_l_2().border_color(rgb(if in_executions { ACCENT } else { BG }))
+                        .focus(|s| s.border_color(rgb(TEXT)))
+                        .px_4().py_3().mb_3().flex().items_center().justify_between().cursor_pointer()
+                        .bg(rgb(if in_executions { LINE } else { BG }))
+                        .on_action(cx.listener(|this, _: &Activate, window, cx| this.show_executions(window, cx)))
+                        .on_click(cx.listener(|this, _, window, cx| this.show_executions(window, cx)))
+                        .child(format!("Executions · {} active", self.executions.list.iter().filter(|e| e.holds_slot()).count()))
+                        .child(shortcut(format!("{MODIFIER}E"))))
                     .child(div().px_5().pb_3().text_xs().text_color(rgb(MUTED)).child("PROJECTS"))
                     .child(div().id("all-projects").role(Role::Button).aria_label(format!("All projects, {MODIFIER_NAME} 0"))
                         .focusable().tab_stop(true).key_context("Selectable")
-                        .border_l_2().border_color(rgb(if self.selected.is_none() { ACCENT } else { BG }))
+                        .border_l_2().border_color(rgb(if !in_executions && self.selected.is_none() { ACCENT } else { BG }))
                         .focus(|s| s.border_color(rgb(TEXT)))
                         .px_4().py_3().flex().items_center().justify_between().cursor_pointer()
-                        .bg(rgb(if self.selected.is_none() { LINE } else { BG }))
+                        .bg(rgb(if !in_executions && self.selected.is_none() { LINE } else { BG }))
                         .on_action(cx.listener(|this, _: &Activate, window, cx| this.select_project(&SelectProject(0), window, cx)))
                         .on_click(cx.listener(|this, _, window, cx| this.select_project(&SelectProject(0), window, cx)))
                         .child("All projects").child(shortcut(format!("{MODIFIER}0"))))
                     .child(div().id("projects").overflow_y_scroll().flex_1().min_h_0()
                         .children(self.projects.iter().enumerate().map(|(index, project)| {
-                            let selected = self.selected == Some(project.id);
+                            let selected = !in_executions && self.selected == Some(project.id);
                             div().id(("project", project.id as usize)).role(Role::Button)
                                 .aria_label(format!("{}/{} {}", project.owner, project.name, project_shortcut(index).unwrap_or_default()))
                                 .focusable().tab_stop(true).key_context("Selectable")
@@ -551,6 +757,9 @@ impl Render for Nightshift {
                         .w_full().key_context("AddButton")
                         .on_click(cx.listener(|this, _, window, cx| this.add_project(&AddProject, window, cx))))))
                 .child(div().flex_1().min_w_0().flex().flex_col().bg(rgb(PANEL))
+                    .child(run_bar)
+                    .children(executions_view)
+                    .when(!in_executions, |panel| panel
                     .child(div().p_5().flex_none().flex().flex_col().gap_3()
                         .child(div().flex().items_center().justify_between().gap_3()
                             .child(div().min_w_0().truncate().text_lg().child(heading))
@@ -566,6 +775,7 @@ impl Render for Nightshift {
                         .child(div().text_xs().text_color(rgb(MUTED))
                             .child("Title text  ·  label:ready-for-agent  ·  -label:bug  ·  repo:owner/name  ·  label:\"help wanted\""))
                         .children(self.query.as_ref().err().map(|error| div().text_color(rgb(0xf2b8a5)).child(error.clone())))
+                        .children(setup_row)
                         .child(div().flex().justify_between().gap_2().text_xs().text_color(rgb(MUTED))
                             .child(format!("{count} matches · {scope_fetched} fetched"))
                             .child(if searching { "Enter refreshes · Esc or ↓ goes to results" } else { "/ to search · ↑ ↓ or j k to browse · Enter to open" })))
@@ -616,12 +826,16 @@ impl Render for Nightshift {
                             }).collect()
                         })).track_scroll(&self.issue_scroll).w_full().flex_1().min_h_0().into_any_element()
                     })
-                    .children(self.errors.iter().map(|error| div().px_5().py_2().text_color(rgb(0xf2b8a5)).child(error.clone())))))
+                    .children(self.errors.iter().map(|error| div().px_5().py_2().text_color(rgb(0xf2b8a5)).child(error.clone()))))))
             .child(div().id("status").role(Role::Status).aria_label(self.status.clone())
                 .px_5().py_2().flex_none().border_t_1().border_color(rgb(LINE)).text_xs().text_color(rgb(MUTED))
                 .flex().justify_between().gap_3()
                 .child(div().flex_1().min_w_0().truncate().child(self.status.clone()))
-                .child(div().flex_none().child(format!("/ Search   {MODIFIER}0 All   {MODIFIER}1–9 Project   Tab Focus"))))
+                .child(div().flex_none().child(if in_executions {
+                    format!("↑ ↓ Select   {MODIFIER}R Refresh run   {MODIFIER}⇧T Retry working   {MODIFIER}⇧P Recheck publication   Tab Focus")
+                } else {
+                    format!("/ Search   {MODIFIER}E Executions   {MODIFIER}0 All   {MODIFIER}1–9 Project   Tab Focus")
+                })))
     }
 }
 
@@ -634,7 +848,7 @@ fn shortcut(label: impl Into<gpui::SharedString>) -> impl IntoElement {
         .child(label.into())
 }
 
-pub fn run(runtime: Handle, startup: Startup) {
+pub fn run(runtime: Handle, startup: Startup, main_started: std::time::Instant) {
     gpui_platform::application().run(move |cx: &mut App| {
         for number in 0..=9 {
             cx.bind_keys([KeyBinding::new(
@@ -664,6 +878,19 @@ pub fn run(runtime: Handle, startup: Startup) {
             KeyBinding::new("enter", AddProject, Some("AddButton")),
             KeyBinding::new("enter", SearchIssues, Some("SearchButton")),
             KeyBinding::new("enter", LoadMore, Some("LoadMoreButton")),
+            KeyBinding::new("secondary-e", ShowExecutions, Some("Nightshift")),
+            KeyBinding::new("secondary-shift-r", ToggleRun, Some("Nightshift")),
+            KeyBinding::new("secondary-shift-t", RetryWorking, Some("Nightshift")),
+            KeyBinding::new("secondary-shift-p", RecheckPublication, Some("Nightshift")),
+            KeyBinding::new("secondary-[", DecreaseLimit, Some("Nightshift")),
+            KeyBinding::new("secondary-]", IncreaseLimit, Some("Nightshift")),
+            KeyBinding::new("secondary-shift-s", FocusSetup, Some("Nightshift")),
+            KeyBinding::new("enter", ToggleRun, Some("ToggleRunButton")),
+            KeyBinding::new("enter", DecreaseLimit, Some("LimitDownButton")),
+            KeyBinding::new("enter", IncreaseLimit, Some("LimitUpButton")),
+            KeyBinding::new("enter", RetryWorking, Some("RetryWorkingButton")),
+            KeyBinding::new("enter", RecheckPublication, Some("RecheckButton")),
+            KeyBinding::new("enter", OpenIssue, Some("OpenPullRequestButton")),
             KeyBinding::new("tab", NextFocus, Some("Nightshift")),
             KeyBinding::new("shift-tab", PreviousFocus, Some("Nightshift")),
         ]);
@@ -688,7 +915,7 @@ pub fn run(runtime: Handle, startup: Startup) {
                 }),
                 ..Default::default()
             },
-            |window, cx| cx.new(|cx| Nightshift::new(window, runtime, startup, cx)),
+            |window, cx| cx.new(|cx| Nightshift::new(window, runtime, startup, main_started, cx)),
         )
         .expect("open Nightshift window");
         cx.activate(true);
