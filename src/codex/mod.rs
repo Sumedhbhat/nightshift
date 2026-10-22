@@ -72,6 +72,25 @@ pub struct TurnRequest {
     pub resume_thread: Option<String>,
 }
 
+/// How to start the app server: `codex app-server` normally; a script in tests.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CodexCommand {
+    pub program: PathBuf,
+    pub args: Vec<String>,
+}
+
+impl CodexCommand {
+    /// `NIGHTSHIFT_CODEX` overrides the executable; otherwise `codex` on PATH.
+    pub fn from_env() -> Self {
+        Self {
+            program: std::env::var_os("NIGHTSHIFT_CODEX")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| "codex".into()),
+            args: vec!["app-server".into()],
+        }
+    }
+}
+
 /// A connection plus, for real runs, the owned child process.
 pub struct Session {
     connection: Connection,
@@ -80,11 +99,12 @@ pub struct Session {
 }
 
 impl Session {
-    /// Spawn `codex app-server` in its own process group so stop can reach its children.
-    pub fn spawn(program: &Path, cwd: &Path) -> Result<Self, CodexError> {
+    /// Spawn the app server in its own process group so stop can reach its children.
+    pub fn spawn(codex: &CodexCommand, cwd: &Path) -> Result<Self, CodexError> {
+        let program = &codex.program;
         let mut command = tokio::process::Command::new(program);
         command
-            .arg("app-server")
+            .args(&codex.args)
             .current_dir(cwd)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())

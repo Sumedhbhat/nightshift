@@ -366,6 +366,23 @@ impl TextInput {
     pub fn text(&self) -> &str {
         &self.content
     }
+
+    pub fn with_placeholder(mut self, placeholder: &str) -> Self {
+        self.placeholder = placeholder.to_owned().into();
+        self
+    }
+
+    /// Replace the whole text, clearing undo history and moving the cursor to the end.
+    pub fn set_text(&mut self, text: &str, cx: &mut Context<Self>) {
+        self.content = text.to_owned().into();
+        self.selected_range = self.content.len()..self.content.len();
+        self.marked_range = None;
+        self.undo.clear();
+        self.redo.clear();
+        self.last_insertion_end = None;
+        self.scroll_x = px(0.);
+        cx.notify();
+    }
 }
 
 impl EntityInputHandler for TextInput {

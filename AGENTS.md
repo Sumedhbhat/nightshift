@@ -1,6 +1,6 @@
 # Working on Nightshift
 
-This repository contains a native Rust/GPUI app for macOS and Linux for adding local projects and fetching GitHub issues through an installed, signed-in GitHub CLI, a SQLite persistence layer, and planning documents. Codex execution is not implemented.
+This repository contains a native Rust/GPUI app for macOS and Linux. It adds local projects, discovers GitHub issues through an installed, signed-in GitHub CLI, and runs owner-started Codex executions that publish independent pull requests. It also includes a SQLite persistence layer and planning documents.
 
 - Run the app with `cargo run --locked`.
 - Validate with `cargo fmt --check`, `cargo test --locked`, and `cargo clippy --locked --all-targets -- -D warnings`.
@@ -9,7 +9,8 @@ This repository contains a native Rust/GPUI app for macOS and Linux for adding l
 - See [docs/public-issue-discovery.md](docs/public-issue-discovery.md) for the current project and issue workflow.
 - See [docs/releases.md](docs/releases.md) for the release channels and branching. Releases come from `release/X.Y` branches; nightlies come from `main`.
 - See [docs/decisions.md](docs/decisions.md) for implementation decisions and [docs/overnight-progress.md](docs/overnight-progress.md) for the current milestone log.
-- See [docs/storage-implementation.md](docs/storage-implementation.md) for persistence rules and unfinished integration work. Storage tests use temporary databases.
+- See [docs/workflow-orchestration.md](docs/workflow-orchestration.md) for runs, executions, and publication, and [docs/codex-integration.md](docs/codex-integration.md) for the Codex runtime boundary.
+- See [docs/storage-implementation.md](docs/storage-implementation.md) for persistence rules. Storage tests use temporary databases.
 
 - Read [MVP_CONCEPT.md](MVP_CONCEPT.md) for the complete current scope.
 - Use [CONTEXT.md](CONTEXT.md) for terminology and [docs/desktop-foundation.md](docs/desktop-foundation.md) for implementation references.

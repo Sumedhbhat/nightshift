@@ -2,7 +2,7 @@
 //! Usage: cargo run --example codex_turn -- /path/to/worktree "prompt"
 //! Set NIGHTSHIFT_STOP_AFTER=<seconds> to test an orderly stop.
 use nightshift::{
-    codex::{Session, TurnRequest, TurnSink},
+    codex::{CodexCommand, Session, TurnRequest, TurnSink},
     domain::OutputSource,
     github::cli::BoxFuture,
 };
@@ -31,15 +31,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
     let cwd = PathBuf::from(args.next().ok_or("missing directory")?);
     let prompt = args.next().ok_or("missing prompt")?;
-    let program = std::env::var_os("NIGHTSHIFT_CODEX")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| "codex".into());
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;
     runtime.block_on(async {
         let started = Instant::now();
-        let mut session = Session::spawn(&program, &cwd)?;
+        let mut session = Session::spawn(&CodexCommand::from_env(), &cwd)?;
         println!("[process] pid {:?}", session.process_id());
         session.handshake().await?;
         let (stop, stopped) = tokio::sync::watch::channel(false);
