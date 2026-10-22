@@ -4,6 +4,7 @@ use nightshift::{
     application::{execution::Services, run},
     codex::CodexCommand,
     github::GitHub,
+    platform,
     storage::{Error, Store},
 };
 use std::sync::{Arc, OnceLock};
@@ -31,11 +32,10 @@ fn main() {
     let (startup_sender, startup_receiver) = tokio::sync::oneshot::channel();
     let startup = runtime.spawn(async move {
         let result = async {
-            let home =
-                std::env::var_os("HOME").ok_or(Error::InvalidInput("HOME is unavailable"))?;
-            let directory = std::env::var_os("NIGHTSHIFT_DATA_DIR")
-                .map(std::path::PathBuf::from)
-                .unwrap_or_else(|| default_data_directory(home.into()));
+            let platform = platform::initialize().await;
+            let directory = platform
+                .data_directory()
+                .ok_or(Error::InvalidInput("HOME is unavailable"))?;
             let store = Store::open(directory.clone()).await?;
             // Nothing runs before this: interrupt unfinished work and never resume it automatically.
             store.reconcile_after_restart().await?;
@@ -57,6 +57,7 @@ fn main() {
                 projects,
                 run: handle,
                 updates: receiver,
+                environment_warning: platform.warning().map(str::to_owned),
             })
         }
         .await;
@@ -77,18 +78,4 @@ fn main() {
         eprintln!("nightshift: failed to close history: {error}");
     }
     runtime.shutdown_timeout(std::time::Duration::from_secs(1));
-}
-
-#[cfg(target_os = "macos")]
-fn default_data_directory(home: std::path::PathBuf) -> std::path::PathBuf {
-    home.join("Library/Application Support/Nightshift")
-}
-
-#[cfg(not(target_os = "macos"))]
-fn default_data_directory(home: std::path::PathBuf) -> std::path::PathBuf {
-    std::env::var_os("XDG_DATA_HOME")
-        .filter(|directory| !directory.is_empty())
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| home.join(".local/share"))
-        .join("nightshift")
 }
