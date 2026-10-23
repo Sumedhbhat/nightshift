@@ -16,10 +16,13 @@ The native folder picker accepts directories. Background Git commands discover t
 - Up/Down or `j`/`k` browse matching results and scroll the selection into view. Enter opens the selected issue on GitHub.
 - ⌘1–⌘9 select the first nine projects in sidebar order, preserving the search query. Each row shows its shortcut suffix. ⌘0 shows All projects. An unassigned number does nothing.
 - ⌘O adds a project. Tab and Shift-Tab move focus. Enter activates a focused control; Space also activates project, remote, and issue rows. The folder picker uses the platform's standard keyboard controls.
+- ⌘Q quits. macOS also exposes **Quit Nightshift** in the native Nightshift menu, using the same action and shortcut when focus is outside the main window.
 
 ## Issue search
 
 The search field filters fetched open issues as the owner types. Refresh is scoped to the selected project and replaces only that project's cached rows. **Load more** appends and deduplicates the next page. The **All projects** view combines project pages already fetched during the current session and does not issue network requests. Changing or removing filters does not require another request. Browsing all issues does not change the readiness requirements for future execution.
+
+The header keeps the search field, result count, and navigation hints visible without a permanent filter-examples line. **Load more** appears after the last matching issue in the scrollable list; it remains available below the empty state when filters match none of the loaded issues. The setup command editor opens only on request; see [execution controls](workflow-orchestration.md#executions-view). The compact bottom status bar reports the latest operation without repeating the issue view's shortcut hints.
 
 Supported query syntax:
 

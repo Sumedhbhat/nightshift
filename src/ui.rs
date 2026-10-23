@@ -113,6 +113,7 @@ struct Nightshift {
     startup_report: Option<StartupReport>,
     executions: executions::Executions,
     setup_input: gpui::Entity<TextInput>,
+    editing_setup: bool,
     _updates: Option<Task<()>>,
     _output_poll: Option<Task<()>>,
     update: UpdateState,
@@ -192,7 +193,7 @@ impl Nightshift {
                         this.status = if this.projects.is_empty() {
                             "Add a project to get started."
                         } else {
-                            "Projects loaded. Press / to search, then Enter to fetch from GitHub."
+                            "Ready"
                         }
                         .into();
                         if let Some(warning) = started.environment_warning {
@@ -232,6 +233,7 @@ impl Nightshift {
             _search: None,
             executions: Default::default(),
             setup_input,
+            editing_setup: false,
             _updates: None,
             _output_poll: None,
             update: Default::default(),
@@ -395,6 +397,7 @@ impl Nightshift {
             return;
         };
         self.selected = selected;
+        self.editing_setup = false;
         self.executions.view = executions::View::Issues;
         let setup = self
             .projects
@@ -524,10 +527,7 @@ impl Nightshift {
                     Ok(Ok(project)) => {
                         this.selected = Some(project.id);
                         this.active_issue = None;
-                        this.status = format!(
-                            "Added {}/{}. Press {MODIFIER}R to fetch open issues.",
-                            project.owner, project.name
-                        );
+                        this.status = format!("Added {}/{}", project.owner, project.name);
                         this.projects.push(project);
                     }
                     Ok(Err(error)) => this.status = error,
@@ -536,6 +536,19 @@ impl Nightshift {
                 cx.notify();
             });
         }));
+        cx.notify();
+    }
+
+    fn edit_setup(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(project) = self.projects.iter().find(|p| Some(p.id) == self.selected) else {
+            return;
+        };
+        let setup = project.setup_command.clone().unwrap_or_default();
+        self.setup_input
+            .update(cx, |input, cx| input.set_text(&setup, cx));
+        self.editing_setup = true;
+        self.executions.view = executions::View::Issues;
+        self.setup_input.focus_handle(cx).focus(window, cx);
         cx.notify();
     }
 
@@ -558,13 +571,20 @@ impl Nightshift {
                         if let Some(project) = this.projects.iter_mut().find(|p| p.id == id) {
                             project.setup_command = command.clone();
                         }
+                        if this.selected == Some(id) {
+                            this.editing_setup = false;
+                        }
                         this.status = match command {
-                            Some(command) => format!("Setup command saved: {command}. It runs in each new worktree before Codex."),
-                            None => "Setup command cleared.".into(),
+                            Some(_) => "Setup command saved".into(),
+                            None => "Setup command cleared".into(),
                         };
                     }
-                    Ok(Err(error)) => this.status = format!("Could not save the setup command: {error}"),
-                    Err(error) => this.status = format!("Could not save the setup command: {error}"),
+                    Ok(Err(error)) => {
+                        this.status = format!("Could not save the setup command: {error}")
+                    }
+                    Err(error) => {
+                        this.status = format!("Could not save the setup command: {error}")
+                    }
                 }
                 cx.notify();
             });
@@ -604,6 +624,15 @@ impl Nightshift {
         self.fetch_issues(true, cx);
     }
 
+    fn render_load_more(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        // The scrollable footer uses the same height as an issue for uniform_list.
+        div().h(px(76.)).px_5().flex().items_center().child(
+            button("load-more", "Load more", !self.busy)
+                .key_context("LoadMoreButton")
+                .on_click(cx.listener(|this, _, window, cx| this.load_more(&LoadMore, window, cx))),
+        )
+    }
+
     fn fetch_issues(&mut self, append: bool, cx: &mut Context<Self>) {
         if self.busy || self.query.is_err() {
             return;
@@ -614,7 +643,7 @@ impl Nightshift {
             .find(|project| Some(project.id) == self.selected)
             .cloned()
         else {
-            self.status = "Select a project to fetch its issues. All projects shows issues already fetched this session.".into();
+            self.status = "Select a project to refresh its issues.".into();
             cx.notify();
             return;
         };
@@ -635,9 +664,9 @@ impl Nightshift {
         }
         let repository = format!("{}/{}", project.owner, project.name);
         self.status = if append {
-            format!("Loading 10 more open issues for {repository}…")
+            "Loading more issues…".into()
         } else {
-            format!("Fetching the first 10 open issues for {repository}…")
+            "Fetching issues…".into()
         };
         let project_id = project.id;
         let work = self.runtime.spawn(async move {
@@ -654,7 +683,6 @@ impl Nightshift {
                             this.status = format!("Could not fetch issues for {repository}.");
                             this.errors.push(format!("{repository}: {error}"));
                         } else {
-                            let received = page.issues.len();
                             for issue in page.issues {
                                 if !this.issues.iter().any(|row| {
                                     row.project_id == project_id && row.issue.number == issue.number
@@ -666,18 +694,13 @@ impl Nightshift {
                                     });
                                 }
                             }
-                            let has_more = page.next.is_some();
                             this.pages.insert(project_id, page.next);
                             let cached = this
                                 .issues
                                 .iter()
                                 .filter(|row| row.project_id == project_id)
                                 .count();
-                            this.status = format!(
-                                "{} {received} open issues for {repository}; {cached} cached{}.",
-                                if append { "Loaded" } else { "Fetched" },
-                                if has_more { " · more available" } else { "" }
-                            );
+                            this.status = format!("{cached} issues loaded");
                         }
                     }
                     Ok(Err(error)) => this.status = error,
@@ -742,24 +765,19 @@ impl Render for Nightshift {
         let in_executions = self.executions.view == executions::View::Executions;
         let run_bar = self.render_run_bar(cx).into_any_element();
         let executions_view = in_executions.then(|| self.render_executions(cx));
-        let setup_row = self.selected.map(|_| {
+        let setup_row = (self.selected.is_some() && self.editing_setup).then(|| {
             div()
                 .flex()
                 .items_center()
                 .gap_2()
                 .text_xs()
-                .child(
-                    div()
-                        .flex_none()
-                        .text_color(rgb(MUTED))
-                        .child(format!("Setup  {MODIFIER}⇧S")),
-                )
+                .child(div().flex_none().text_color(rgb(MUTED)).child("Setup"))
                 .child(div().flex_1().min_w_0().child(self.setup_input.clone()))
                 .child(
                     div()
                         .flex_none()
                         .text_color(rgb(MUTED))
-                        .child("Enter saves"),
+                        .child("Enter saves · Esc cancels"),
                 )
         });
         let empty: String = if self.projects.is_empty() {
@@ -794,6 +812,7 @@ impl Render for Nightshift {
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &FocusResults, window, cx| {
+                this.editing_setup = false;
                 this.focus.focus(window, cx);
                 if this.active_issue.is_none() { this.move_issue(true, window, cx); }
                 cx.notify();
@@ -813,13 +832,7 @@ impl Render for Nightshift {
             .on_action(cx.listener(|this, _: &RecheckPublication, _, cx| this.recheck_publication(cx)))
             .on_action(cx.listener(|this, _: &DecreaseLimit, _, cx| this.change_limit(-1, cx)))
             .on_action(cx.listener(|this, _: &IncreaseLimit, _, cx| this.change_limit(1, cx)))
-            .on_action(cx.listener(|this, _: &FocusSetup, window, cx| {
-                if this.selected.is_some() {
-                    this.executions.view = executions::View::Issues;
-                    this.setup_input.focus_handle(cx).focus(window, cx);
-                    cx.notify();
-                }
-            }))
+            .on_action(cx.listener(|this, _: &FocusSetup, window, cx| this.edit_setup(window, cx)))
             .on_action(cx.listener(|this, _: &InstallUpdate, _, cx| this.install_update(cx)))
             .on_action(|_: &Close, window, _| window.remove_window())
             .on_action(|_: &NextFocus, window, cx| window.focus_next(cx))
@@ -884,17 +897,15 @@ impl Render for Nightshift {
                     .child(div().p_5().flex_none().flex().flex_col().gap_3()
                         .child(div().flex().items_center().justify_between().gap_3()
                             .child(div().min_w_0().truncate().text_lg().child(heading))
-                            .child(div().flex_none().text_xs().text_color(rgb(MUTED)).child("OPEN ISSUES")))
+                            .children(self.selected.map(|_| button("edit-setup", format!("Setup  {MODIFIER}⇧S"), true)
+                                .key_context("Selectable")
+                                .on_action(cx.listener(|this, _: &Activate, window, cx| this.edit_setup(window, cx)))
+                                .on_click(cx.listener(|this, _, window, cx| this.edit_setup(window, cx))))))
                         .child(div().flex().items_center().gap_2()
                             .child(div().flex_1().min_w_0().child(self.search_input.clone()))
-                            .children(has_more.then(|| button("load-more", "Load more", !self.busy)
-                                .key_context("LoadMoreButton")
-                                .on_click(cx.listener(|this, _, window, cx| this.load_more(&LoadMore, window, cx)))))
                             .child(button("refresh", if self.busy { "Fetching…".into() } else { format!("Refresh  {MODIFIER}R") }, !self.busy && self.selected.is_some())
                                 .key_context("SearchButton")
                                 .on_click(cx.listener(|this, _, window, cx| this.search(&SearchIssues, window, cx)))))
-                        .child(div().text_xs().text_color(rgb(MUTED))
-                            .child("Title text  ·  label:ready-for-agent  ·  -label:bug  ·  repo:owner/name  ·  label:\"help wanted\""))
                         .children(self.query.as_ref().err().map(|error| div().text_color(rgb(0xf2b8a5)).child(error.clone())))
                         .children(setup_row)
                         .child(div().flex().justify_between().gap_2().text_xs().text_color(rgb(MUTED))
@@ -916,10 +927,16 @@ impl Render for Nightshift {
                             }))
                     }))
                     .child(if count == 0 {
-                        div().flex_1().p_6().text_color(rgb(MUTED)).child(empty).into_any_element()
+                        div().flex_1().flex().flex_col()
+                            .child(div().flex_1().p_6().text_color(rgb(MUTED)).child(empty))
+                            .children(has_more.then(|| self.render_load_more(cx)))
+                            .into_any_element()
                     } else {
-                        uniform_list("issues", count, cx.processor(move |this, range: std::ops::Range<usize>, _, cx| {
+                        uniform_list("issues", count + usize::from(has_more), cx.processor(move |this, range: std::ops::Range<usize>, _, cx| {
                             range.map(|index| {
+                                if index == count {
+                                    return this.render_load_more(cx).into_any_element();
+                                }
                                 let issue_index = visible[index];
                                 let row = &this.issues[issue_index];
                                 let url = row.issue.url.clone();
@@ -944,19 +961,16 @@ impl Render for Nightshift {
                                         .child(div().min_w_0().truncate().child(row.issue.title.clone())))
                                     .child(div().truncate().text_xs().text_color(rgb(MUTED))
                                         .child(format!("{}  ·  {}", row.repository, row.issue.labels.join(" · "))))
+                                    .into_any_element()
                             }).collect()
                         })).track_scroll(&self.issue_scroll).w_full().flex_1().min_h_0().into_any_element()
                     })
                     .children(self.errors.iter().map(|error| div().px_5().py_2().text_color(rgb(0xf2b8a5)).child(error.clone()))))))
             .child(div().id("status").role(Role::Status).aria_label(self.status.clone())
-                .px_5().py_2().flex_none().border_t_1().border_color(rgb(LINE)).text_xs().text_color(rgb(MUTED))
+                .px_3().py_1().flex_none().border_t_1().border_color(rgb(LINE)).text_xs().text_color(rgb(MUTED))
                 .flex().justify_between().gap_3()
                 .child(div().flex_1().min_w_0().truncate().child(self.status.clone()))
-                .child(div().flex_none().child(if in_executions {
-                    format!("↑ ↓ Select   {MODIFIER}R Refresh run   {MODIFIER}⇧T Retry working   {MODIFIER}⇧P Recheck publication   Tab Focus")
-                } else {
-                    format!("/ Search   {MODIFIER}E Executions   {MODIFIER}0 All   {MODIFIER}1–9 Project   Tab Focus")
-                })))
+                .children(in_executions.then(|| div().flex_none().child(format!("↑ ↓ Select · {MODIFIER}R Refresh")))))
     }
 }
 
@@ -1019,6 +1033,11 @@ pub fn run(runtime: Handle, startup: Startup, main_started: std::time::Instant) 
         ]);
         text_input::bind_keys(cx);
         cx.on_action(|_: &Quit, cx| cx.quit());
+        // AppKit needs a native menu action when no GPUI window is handling keys.
+        #[cfg(target_os = "macos")]
+        cx.set_menus([
+            gpui::Menu::new("Nightshift").items([gpui::MenuItem::action("Quit Nightshift", Quit)])
+        ]);
         cx.on_window_closed(|cx, _| {
             if cx.windows().is_empty() {
                 cx.quit();
