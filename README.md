@@ -11,7 +11,7 @@ Download the package for your machine from a release:
 - macOS on Apple silicon: `nightshift-macos-aarch64.dmg`. Intel Macs: `nightshift-macos-x86_64.dmg`. Open it and drag Nightshift into Applications.
 - Debian or Ubuntu: `nightshift-linux-<arch>.deb`. Install it with `sudo apt install ./nightshift-linux-x86_64.deb`.
 
-The macOS app isn't notarized yet, so the first launch needs one extra step. See [releases](docs/releases.md#macos). The installed version appears next to the app name and from `nightshift --version`.
+The macOS app isn't notarized yet, so the first launch needs one extra step. See [releases](docs/releases.md#macos). The installed version appears next to the app name and from `nightshift --version`. Installed releases update themselves: when a newer release on your channel is ready, the sidebar shows **Restart to update**. See [updates](docs/releases.md#updates).
 
 Linux builds need glibc 2.35 or newer, Git, and a Wayland or X11 session with Vulkan drivers. See [releases](docs/releases.md) for how releases are cut and patched.
 

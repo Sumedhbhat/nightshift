@@ -37,6 +37,15 @@ Local builds without `NIGHTSHIFT_VERSION` show the plain `Cargo.toml` version. T
 
 The workflow rejects branches named `release/X.Y.Z` and fails when `Cargo.toml` on `release/X.Y` doesn't hold an `X.Y.*` version.
 
+## Updates
+
+Release builds update themselves, like T3 Code. Thirty seconds after launch, and then every hour, Nightshift asks GitHub, through the signed-in `gh`, for releases newer than the running version on the same channel: nightly builds follow nightlies, and stable builds follow stable releases. When it finds one, it downloads the package for the current platform in the background, checks it against `SHA256SUMS`, and shows **Restart to update** in the sidebar (⌘⇧U on macOS, Ctrl+Shift+U on Linux).
+
+- **macOS.** Nightshift copies the app out of the disk image to a hidden folder beside the installed `Nightshift.app` and checks its signature and `VERSION`. Restarting swaps the two bundles and opens the new one. The replaced bundle is deleted on the next launch. The app must be in a folder you can write to, such as `/Applications`. Copies run from the disk image don't update.
+- **Linux.** Restarting runs `pkexec apt-get install` on the downloaded package, so your desktop asks for your password, and then starts the new version. Only the packaged `/usr/bin/nightshift` updates itself.
+
+If a run or execution is active, the first press warns that restarting interrupts it, and a second press restarts. Local builds, pull-request builds, and builds without `NIGHTSHIFT_VERSION` never check for updates. Failed checks are logged to standard error and retried an hour later.
+
 ## Builds
 
 Each release has these packages, plus `SHA256SUMS`:

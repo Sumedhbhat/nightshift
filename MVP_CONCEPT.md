@@ -31,6 +31,10 @@ The issue search field combines text and filters. `/` or ⌘F focuses the field.
 
 This is a local search over fetched open issues, not a GitHub-wide search or an implementation of every GitHub qualifier. It does not expand execution eligibility.
 
+## Updates
+
+Release builds check for a newer release on their own channel at startup and then hourly, through the authenticated GitHub CLI. Nightshift downloads and verifies the update in the background, then offers **Restart to update** in the sidebar, with a keyboard shortcut. It never installs or restarts without the owner's action. Restarting stops active work the same way quitting does, so while a run or execution is active it requires a second confirmation. See [docs/releases.md](docs/releases.md#updates).
+
 ## Rules
 
 - The owner starts unattended work. While a run is active, Nightshift automatically refreshes open issues assigned to the active GitHub CLI account and labeled `ready-for-agent` across all added projects, starting eligible work as capacity becomes available, including issues assigned or labeled after the run began. Manual search remains available.
