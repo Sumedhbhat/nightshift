@@ -13,6 +13,7 @@ use nightshift::{
     domain::Project,
     github::{self, GitHub, Issue, Remote},
     storage::{self, Store},
+    update::{self, Updater},
 };
 use std::collections::HashMap;
 use text_input::TextInput;
@@ -57,7 +58,8 @@ actions!(
         RecheckPublication,
         DecreaseLimit,
         IncreaseLimit,
-        FocusSetup
+        FocusSetup,
+        InstallUpdate
     ]
 );
 
@@ -113,6 +115,18 @@ struct Nightshift {
     setup_input: gpui::Entity<TextInput>,
     _updates: Option<Task<()>>,
     _output_poll: Option<Task<()>>,
+    update: UpdateState,
+}
+
+/// A release downloaded in the background, installed when the owner restarts.
+#[derive(Default)]
+struct UpdateState {
+    updater: Option<Updater>,
+    ready: Option<update::Prepared>,
+    installing: bool,
+    /// Set after warning that restarting stops active work; the next request restarts.
+    confirmed: bool,
+    _check: Option<Task<()>>,
 }
 
 /// Written when `NIGHTSHIFT_STARTUP_REPORT` names a file; the app then quits after its first
@@ -174,6 +188,7 @@ impl Nightshift {
                         this.store = Some(started.store);
                         this.projects = started.projects;
                         this.listen(started.run, started.updates, cx);
+                        this.watch_for_updates(cx);
                         this.status = if this.projects.is_empty() {
                             "Add a project to get started."
                         } else {
@@ -219,6 +234,7 @@ impl Nightshift {
             setup_input,
             _updates: None,
             _output_poll: None,
+            update: Default::default(),
             startup_report: std::env::var_os("NIGHTSHIFT_STARTUP_REPORT").map(|path| {
                 StartupReport {
                     path: path.into(),
@@ -269,6 +285,100 @@ impl Nightshift {
             eprintln!("nightshift: could not write startup report: {error}");
         }
         cx.defer(|cx| cx.quit());
+    }
+
+    /// Checks for a newer release now and then hourly, until one is downloaded and ready.
+    fn watch_for_updates(&mut self, cx: &mut Context<Self>) {
+        let Some(updater) = Updater::detect() else {
+            return;
+        };
+        self.update.updater = Some(updater.clone());
+        let runtime = self.runtime.clone();
+        self.update._check = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(update::FIRST_CHECK_DELAY)
+                .await;
+            loop {
+                let check = updater.clone();
+                match runtime
+                    .spawn(async move { check.prepare_newest().await })
+                    .await
+                {
+                    Ok(Ok(Some(prepared))) => {
+                        let _ = this.update(cx, |this, cx| {
+                            this.status = format!(
+                                "Nightshift {} is ready. Press {MODIFIER}⇧U to restart and update.",
+                                prepared.version
+                            );
+                            this.update.ready = Some(prepared);
+                            cx.notify();
+                        });
+                        return;
+                    }
+                    Ok(Ok(None)) => {}
+                    Ok(Err(error)) => eprintln!("nightshift: update check failed: {error}"),
+                    Err(error) => eprintln!("nightshift: update check stopped: {error}"),
+                }
+                cx.background_executor().timer(update::CHECK_INTERVAL).await;
+            }
+        }));
+    }
+
+    fn install_update(&mut self, cx: &mut Context<Self>) {
+        let (Some(updater), Some(prepared)) =
+            (self.update.updater.clone(), self.update.ready.clone())
+        else {
+            return;
+        };
+        if self.update.installing {
+            return;
+        }
+        let active = self
+            .executions
+            .list
+            .iter()
+            .filter(|e| e.holds_slot())
+            .count();
+        let run_active = self.executions.status.owner.is_some();
+        if (active > 0 || run_active) && !self.update.confirmed {
+            self.update.confirmed = true;
+            self.status = format!(
+                "Restarting ends the active run and interrupts {active} active execution{}. Press {MODIFIER}⇧U again to restart and update.",
+                if active == 1 { "" } else { "s" }
+            );
+            cx.notify();
+            return;
+        }
+        self.update.confirmed = false;
+        self.update.installing = true;
+        self.status = if cfg!(target_os = "linux") {
+            format!(
+                "Installing Nightshift {}. Enter your password if asked.",
+                prepared.version
+            )
+        } else {
+            format!("Installing Nightshift {}…", prepared.version)
+        };
+        let work = self
+            .runtime
+            .spawn(async move { updater.install(&prepared).await });
+        cx.spawn(async move |this, cx| {
+            let result = work.await;
+            let _ = this.update(cx, |this, cx| {
+                this.update.installing = false;
+                match result {
+                    // main relaunches the new version after storage closes.
+                    Ok(Ok(())) => cx.quit(),
+                    Ok(Err(error)) => {
+                        this.status = format!("Could not install the update: {error}")
+                    }
+                    Err(error) => this.status = format!("Could not install the update: {error}"),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
     }
 
     fn select_project(
@@ -710,6 +820,7 @@ impl Render for Nightshift {
                     cx.notify();
                 }
             }))
+            .on_action(cx.listener(|this, _: &InstallUpdate, _, cx| this.install_update(cx)))
             .on_action(|_: &Close, window, _| window.remove_window())
             .on_action(|_: &NextFocus, window, cx| window.focus_next(cx))
             .on_action(|_: &PreviousFocus, window, cx| window.focus_prev(cx))
@@ -757,6 +868,12 @@ impl Render for Nightshift {
                                     .child(div().truncate().text_xs().text_color(rgb(MUTED)).child(project.owner.clone())))
                                 .children(project_shortcut(index).map(shortcut))
                         })))
+                    .children(self.update.ready.as_ref().map(|ready| div().px_4().pt_4().flex().flex_col().gap_2()
+                        .child(div().text_xs().text_color(rgb(MUTED)).child(format!("Nightshift {} is ready", ready.version)))
+                        .child(button("install-update", if self.update.installing { "Installing update…".into() } else { format!("Restart to update  {MODIFIER}⇧U") }, !self.update.installing)
+                            .w_full().border_color(rgb(ACCENT)).key_context("UpdateButton")
+                            .aria_label(format!("Restart to update to Nightshift {}, {MODIFIER_NAME} Shift U", ready.version))
+                            .on_click(cx.listener(|this, _, _, cx| this.install_update(cx))))))
                     .child(div().p_4().child(button("add-project", format!("Add project  {MODIFIER}O"), !self.busy && self.store.is_some())
                         .w_full().key_context("AddButton")
                         .on_click(cx.listener(|this, _, window, cx| this.add_project(&AddProject, window, cx))))))
@@ -889,6 +1006,8 @@ pub fn run(runtime: Handle, startup: Startup, main_started: std::time::Instant) 
             KeyBinding::new("secondary-[", DecreaseLimit, Some("Nightshift")),
             KeyBinding::new("secondary-]", IncreaseLimit, Some("Nightshift")),
             KeyBinding::new("secondary-shift-s", FocusSetup, Some("Nightshift")),
+            KeyBinding::new("secondary-shift-u", InstallUpdate, Some("Nightshift")),
+            KeyBinding::new("enter", InstallUpdate, Some("UpdateButton")),
             KeyBinding::new("enter", ToggleRun, Some("ToggleRunButton")),
             KeyBinding::new("enter", DecreaseLimit, Some("LimitDownButton")),
             KeyBinding::new("enter", IncreaseLimit, Some("LimitUpButton")),
