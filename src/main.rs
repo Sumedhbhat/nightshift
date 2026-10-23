@@ -78,4 +78,5 @@ fn main() {
         eprintln!("nightshift: failed to close history: {error}");
     }
     runtime.shutdown_timeout(std::time::Duration::from_secs(1));
+    nightshift::update::relaunch_if_installed();
 }
