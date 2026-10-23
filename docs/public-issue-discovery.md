@@ -16,6 +16,7 @@ The native folder picker accepts directories. Background Git commands discover t
 - Up/Down or `j`/`k` browse matching results and scroll the selection into view. Enter opens the selected issue on GitHub.
 - ⌘1–⌘9 select the first nine projects in sidebar order, preserving the search query. Each row shows its shortcut suffix. ⌘0 shows All projects. An unassigned number does nothing.
 - ⌘O adds a project. Tab and Shift-Tab move focus. Enter activates a focused control; Space also activates project, remote, and issue rows. The folder picker uses the platform's standard keyboard controls.
+- ⌘Q quits. macOS also exposes **Quit Nightshift** in the native Nightshift menu, using the same action and shortcut when focus is outside the main window.
 
 ## Issue search
 

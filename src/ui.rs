@@ -1033,6 +1033,11 @@ pub fn run(runtime: Handle, startup: Startup, main_started: std::time::Instant) 
         ]);
         text_input::bind_keys(cx);
         cx.on_action(|_: &Quit, cx| cx.quit());
+        // AppKit needs a native menu action when no GPUI window is handling keys.
+        #[cfg(target_os = "macos")]
+        cx.set_menus([
+            gpui::Menu::new("Nightshift").items([gpui::MenuItem::action("Quit Nightshift", Quit)])
+        ]);
         cx.on_window_closed(|cx, _| {
             if cx.windows().is_empty() {
                 cx.quit();
