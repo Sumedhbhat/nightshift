@@ -68,7 +68,7 @@ After a crash, startup marks unfinished attempts interrupted with their slots he
 - **Actions.** The owner actions are enabled only when the stored state allows them. Enter opens the pull request.
 - **Output.** It is paged from storage, 100 blocks per page with at most 24 pages cached, and follows new output every 500 ms.
 - **Run bar.** It shows the run owner, slots in use against the limit, the next refresh, and recent problems. `Ctrl/⌘[` and `Ctrl/⌘]` change the concurrency limit (1–8, decision D5).
-- **Setup command.** In a project's issues view, `Ctrl/⌘⇧S` focuses the setup command field, and Enter saves it.
+- **Setup command.** In a project's issues view, **Setup** beside the project name or `Ctrl/⌘⇧S` opens and focuses the setup command editor. Enter saves and hides it; Esc cancels editing and hides it. The editor stays hidden during normal issue browsing.
 
 ## Verification
 

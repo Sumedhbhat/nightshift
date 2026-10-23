@@ -10,6 +10,8 @@ The MVP uses independent execution branches and pull requests targeting the repo
 
 The initial usable scaffold lets the owner add local repositories and fetch open issues from GitHub repositories the active GitHub CLI account can access. It fetches up to ten results for the selected project at a time and provides a search field with GitHub-style qualifiers, including `label:ready-for-agent`. **Load more** follows GitHub pagination for that project. **All projects** combines results already fetched during the current session; it does not start a broader request. This browsing mode does not authorize execution or relax the run readiness rules below. Runs, executions, and publication are implemented as described below; see [docs/workflow-orchestration.md](docs/workflow-orchestration.md).
 
+Keep the issue browser compact: show **Load more** after the issue results, omit permanent filter examples, and open the optional setup command editor only through **Setup** or its shortcut. Keep routine status messages brief without repeating shortcut hints in the bottom bar.
+
 The authenticated GitHub CLI integration accepts a repository when the active account can access it and limits execution candidates to issues assigned to that account.
 
 ## Workflow

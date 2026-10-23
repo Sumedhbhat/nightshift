@@ -21,6 +21,8 @@ The native folder picker accepts directories. Background Git commands discover t
 
 The search field filters fetched open issues as the owner types. Refresh is scoped to the selected project and replaces only that project's cached rows. **Load more** appends and deduplicates the next page. The **All projects** view combines project pages already fetched during the current session and does not issue network requests. Changing or removing filters does not require another request. Browsing all issues does not change the readiness requirements for future execution.
 
+The header keeps the search field, result count, and navigation hints visible without a permanent filter-examples line. **Load more** appears after the last matching issue in the scrollable list; it remains available below the empty state when filters match none of the loaded issues. The setup command editor opens only on request; see [execution controls](workflow-orchestration.md#executions-view). The compact bottom status bar reports the latest operation without repeating the issue view's shortcut hints.
+
 Supported query syntax:
 
 | Input | Meaning |
