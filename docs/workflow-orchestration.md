@@ -1,6 +1,6 @@
 # Workflow orchestration
 
-This implements milestone 6 of the [implementation plan](implementation-plan.md): the owner-started run, execution tasks, publication, and the executions view. Product rules are in [MVP_CONCEPT.md](../MVP_CONCEPT.md). The building blocks are described in [storage-implementation.md](storage-implementation.md), [public-issue-discovery.md](public-issue-discovery.md), [worktree-preparation.md](worktree-preparation.md), and [codex-integration.md](codex-integration.md).
+This describes the owner-started run, execution tasks, publication, and the executions view. Product rules are in [MVP_CONCEPT.md](../MVP_CONCEPT.md). The building blocks are described in [storage-implementation.md](storage-implementation.md), [public-issue-discovery.md](public-issue-discovery.md), [worktree-preparation.md](worktree-preparation.md), and [codex-integration.md](codex-integration.md).
 
 ## The run
 

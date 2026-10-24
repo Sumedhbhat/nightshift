@@ -356,6 +356,16 @@ impl Gh {
         path: &str,
         body: &serde_json::Value,
     ) -> GhResult<T> {
+        self.send("POST", path, body).await
+    }
+
+    /// `gh api --method <method> <path> --input -` with a JSON body, for remote writes.
+    pub async fn send<T: DeserializeOwned>(
+        &self,
+        method: &str,
+        path: &str,
+        body: &serde_json::Value,
+    ) -> GhResult<T> {
         let output = self
             .raw(
                 &[
@@ -363,7 +373,7 @@ impl Gh {
                     "--hostname",
                     HOST,
                     "--method",
-                    "POST",
+                    method,
                     path,
                     "--input",
                     "-",

@@ -14,6 +14,12 @@ Keep the issue browser compact: show **Load more** after the issue results, omit
 
 The authenticated GitHub CLI integration accepts a repository when the active account can access it and limits execution candidates to issues assigned to that account.
 
+## Issue management
+
+The owner manages each project's issues inside Nightshift instead of switching to GitHub. **New issue** creates an issue in the selected project with a title and a multi-line description. It can assign the issue to the active GitHub CLI account, which is on by default, and add `ready-for-agent`, which is off by default so a draft never becomes run workload by accident. Opening an issue from the list shows its state, author, assignees, labels, description, and comments. From there the owner can edit the title and description, comment, close it as completed or not planned, reopen it, add or remove `ready-for-agent`, assign or unassign themselves, and open it on GitHub.
+
+Every issue write is an explicit owner action through the authenticated GitHub CLI. Runs, executions, refreshes, and publication never edit issues. Changing an issue after its execution started does not alter that execution, which keeps its saved description. A label or assignment change takes effect for new starts through the normal start-eligibility check. Parent and dependency relationships are still maintained on GitHub.
+
 ## Workflow
 
 1. Add a project by selecting an existing, initialized local repository. Identify its GitHub repository from its Git remote.
@@ -29,7 +35,9 @@ The authenticated GitHub CLI integration accepts a repository when the active ac
 
 All app workflows must be usable with the keyboard, with visible shortcut hints and focus indicators. ⌘1 through ⌘9 select projects in sidebar order; ⌘0 selects All projects. Projects beyond the ninth remain reachable through keyboard focus.
 
-The issue search field combines text and filters. `/` or ⌘F focuses the field. Ordinary typing, selection, and clipboard editing use standard text input, without Vim modes. Search applies to fetched open issues across added projects, narrowed by the selected sidebar project. Title text and GitHub-style qualifiers such as `label:ready-for-agent`, `-label:bug`, `repo:owner/name`, and quoted label names can be combined. Show unsupported or incomplete filters explicitly rather than silently ignoring them. Enter in search or ⌘R refreshes only the selected project and fetches its first page; **Load more** fetches its next page. Esc moves focus to results without clearing the query. Arrow keys and `j`/`k` browse results outside the field, and Enter opens an issue. Tab and Shift-Tab reach other controls.
+The issue search field combines text and filters. `/` or ⌘F focuses the field. Ordinary typing, selection, and clipboard editing use standard text input, without Vim modes. Search applies to fetched open issues across added projects, narrowed by the selected sidebar project. Title text and GitHub-style qualifiers such as `label:ready-for-agent`, `-label:bug`, `repo:owner/name`, and quoted label names can be combined. Show unsupported or incomplete filters explicitly rather than silently ignoring them. Enter in search or ⌘R refreshes only the selected project and fetches its first page; **Load more** fetches its next page. Esc moves focus to results without clearing the query. Arrow keys and `j`/`k` browse results outside the field, and Enter opens an issue in Nightshift. Tab and Shift-Tab reach other controls.
+
+⌘N opens the new-issue form for the selected project. In the form, Enter in the title moves to the description, Enter in the description adds a line, ⌘↵ submits, and Esc cancels while keeping the draft. In the issue view, ⌘⇧E edits, ⌘⇧C closes or reopens, ⌘⇧X closes as not planned, ⌘⇧L toggles `ready-for-agent`, ⌘⇧A toggles the owner's assignment, ⌘⇧M focuses the comment field, ⌘↵ posts the comment, ⌘⇧O opens the issue on GitHub, ⌘R reloads it, arrow keys and `j`/`k` scroll, and Esc returns to the list.
 
 This is a local search over fetched open issues, not a GitHub-wide search or an implementation of every GitHub qualifier. It does not expand execution eligibility.
 
@@ -75,6 +83,6 @@ Release builds check for a newer release on their own channel at startup and the
 - Keep agent changes in the issue's worktree, separate from the owner's original checkout.
 - Quitting Nightshift stops active executions, including any preparation work. Preserve their saved output, history, branches, and worktrees, and record stopped executions as interrupted. Do not resume them automatically.
 - Interrupted executions remain available for inspection after reopening Nightshift. Provide **Retry working** to continue the same execution from its saved working step, retaining the worktree, branch, issue snapshot, and history. Confirm the previous owned process has stopped and acquire concurrency capacity before resuming. Never resume automatically or replay completed steps. If continuation cannot be established, retain the interruption and report the error.
-- Scope includes unattended progression, required checks and automated review phases, branch publication, and independent PR creation. Final human review and merging remain manual. Do not add scheduled starts, issue editing, a code editor, automatic recovery, or cleanup. An explicit owner-requested publication recheck is not automatic recovery. Limits for fixing review findings and retrying failed phases are still to be decided.
+- Scope includes unattended progression, required checks and automated review phases, branch publication, and independent PR creation. Final human review and merging remain manual. Do not add scheduled starts, automatic issue changes, a code editor, automatic recovery, or cleanup. An explicit owner-requested publication recheck is not automatic recovery. Limits for fixing review findings and retrying failed phases are still to be decided.
 
-See [docs/desktop-foundation.md](docs/desktop-foundation.md) for the architecture direction, [docs/implementation-plan.md](docs/implementation-plan.md) for implementation milestones, and [CONTEXT.md](CONTEXT.md) for terminology.
+See [docs/desktop-foundation.md](docs/desktop-foundation.md) for the architecture direction, [docs/decisions.md](docs/decisions.md) for implementation decisions, and [CONTEXT.md](CONTEXT.md) for terminology.

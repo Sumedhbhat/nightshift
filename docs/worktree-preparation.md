@@ -1,6 +1,6 @@
 # Worktree preparation
 
-This implements milestone 4 of the [implementation plan](implementation-plan.md). Preparation runs after an execution enters `working` and before Codex starts. Product rules are in [MVP_CONCEPT.md](../MVP_CONCEPT.md).
+This describes worktree preparation. Preparation runs after an execution enters `working` and before Codex starts. Product rules are in [MVP_CONCEPT.md](../MVP_CONCEPT.md).
 
 ## Steps
 

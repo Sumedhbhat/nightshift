@@ -662,3 +662,219 @@ fn checkout_inspection_validates_git_and_keeps_distinct_remotes() {
         assert_eq!(remotes[0].name, "origin");
     });
 }
+
+fn issue_thread_fixture(fake: &FakeGh, number: u32, changes: Value) {
+    fake.set(
+        &format!("api --hostname github.com --method GET repos/owner/repo/issues/{number}"),
+        fake::ok(with(issue(number), changes)),
+    );
+    fake.get_all(
+        &format!("repos/owner/repo/issues/{number}/comments?per_page=100"),
+        json!([[{"id": 7, "body": "Looks good", "user": {"login": "reviewer"}, "created_at": "2026-10-24T10:00:00Z"}]]),
+    );
+}
+
+#[test]
+fn issue_thread_reads_the_issue_comments_and_viewer_and_rejects_pull_requests() {
+    use issues::Comment;
+    let fake = FakeGh::signed_in(ME);
+    issue_thread_fixture(&fake, 4, json!({"user": {"login": "lead"}}));
+    let thread = run(GitHub::new(fake.gh()).issue_thread(&project(), 4)).unwrap();
+    assert_eq!(thread.viewer, ME);
+    assert_eq!(thread.issue.body, "Body 4");
+    assert_eq!(thread.issue.author, "lead");
+    assert!(thread.issue.open && thread.issue.ready() && thread.issue.assigned_to("OCTO"));
+    assert_eq!(
+        thread.comments,
+        vec![Comment {
+            id: 7,
+            author: "reviewer".into(),
+            body: "Looks good".into(),
+            created_at: "2026-10-24T10:00:00Z".into(),
+        }]
+    );
+
+    issue_thread_fixture(&fake, 5, json!({"pull_request": {}}));
+    let error = run(GitHub::new(fake.gh()).issue_thread(&project(), 5)).unwrap_err();
+    assert!(error.to_string().contains("pull request"), "{error}");
+}
+
+#[test]
+fn create_issue_assigns_and_labels_only_when_asked() {
+    use issues::Draft;
+    let fake = FakeGh::signed_in(ME);
+    fake.respond_prefix(
+        "api --hostname github.com --method POST repos/owner/repo/issues --input -",
+        fake::ok(with(issue(9), json!({"labels": [], "assignees": []}))),
+    );
+    let github = GitHub::new(fake.gh());
+    let draft = Draft {
+        title: "  Add keyboard help  ".into(),
+        body: "Line one\nLine two".into(),
+        assign_me: true,
+        ready: false,
+    };
+    let thread = run(github.create_issue(&project(), &draft)).unwrap();
+    assert_eq!(thread.issue.number, 9);
+    let post = fake
+        .calls()
+        .into_iter()
+        .find(|c| c.contains("POST"))
+        .unwrap();
+    let body: Value = serde_json::from_str(post.split(" <<< ").nth(1).unwrap()).unwrap();
+    assert_eq!(
+        body,
+        json!({"title": "Add keyboard help", "body": "Line one\nLine two", "assignees": [ME]})
+    );
+
+    let ready = Draft {
+        ready: true,
+        assign_me: false,
+        ..draft
+    };
+    run(github.create_issue(&project(), &ready)).unwrap();
+    let post = fake
+        .calls()
+        .into_iter()
+        .rfind(|c| c.contains("POST"))
+        .unwrap();
+    let body: Value = serde_json::from_str(post.split(" <<< ").nth(1).unwrap()).unwrap();
+    assert_eq!(body["labels"], json!(["ready-for-agent"]));
+    assert!(body.get("assignees").is_none());
+
+    let blank = Draft {
+        title: "   ".into(),
+        ..Default::default()
+    };
+    assert!(run(github.create_issue(&project(), &blank)).is_err());
+    assert_eq!(
+        fake.calls().iter().filter(|c| c.contains("POST")).count(),
+        2,
+        "a blank title never reaches GitHub"
+    );
+}
+
+#[test]
+fn issue_changes_use_the_matching_endpoint_and_reread_the_issue() {
+    use issues::Change;
+    let cases = [
+        (
+            Change::Edit {
+                title: " New ".into(),
+                body: "Body".into(),
+            },
+            "--method PATCH repos/owner/repo/issues/4 --input - <<< {\"title\":\"New\",\"body\":\"Body\"}",
+        ),
+        (
+            Change::Comment("Thanks".into()),
+            "--method POST repos/owner/repo/issues/4/comments --input - <<< {\"body\":\"Thanks\"}",
+        ),
+        (
+            Change::Close { not_planned: false },
+            "--method PATCH repos/owner/repo/issues/4 --input - <<< {\"state\":\"closed\",\"state_reason\":\"completed\"}",
+        ),
+        (
+            Change::Close { not_planned: true },
+            "--method PATCH repos/owner/repo/issues/4 --input - <<< {\"state\":\"closed\",\"state_reason\":\"not_planned\"}",
+        ),
+        (
+            Change::Reopen,
+            "--method PATCH repos/owner/repo/issues/4 --input - <<< {\"state\":\"open\"}",
+        ),
+        (
+            Change::SetReady(true),
+            "--method POST repos/owner/repo/issues/4/labels --input - <<< {\"labels\":[\"ready-for-agent\"]}",
+        ),
+        (
+            Change::SetReady(false),
+            "--method DELETE repos/owner/repo/issues/4/labels/ready-for-agent --input -",
+        ),
+        (
+            Change::SetAssigned(true),
+            "--method POST repos/owner/repo/issues/4/assignees --input - <<< {\"assignees\":[\"octo\"]}",
+        ),
+        (
+            Change::SetAssigned(false),
+            "--method DELETE repos/owner/repo/issues/4/assignees --input - <<< {\"assignees\":[\"octo\"]}",
+        ),
+    ];
+    for (change, expected) in cases {
+        let fake = FakeGh::signed_in(ME);
+        fake.respond_prefix("api --hostname github.com --method P", fake::ok(json!({})));
+        fake.respond_prefix(
+            "api --hostname github.com --method DELETE",
+            fake::ok(json!([])),
+        );
+        issue_thread_fixture(&fake, 4, json!({}));
+        let changed = run(GitHub::new(fake.gh()).change_issue(&project(), 4, &change)).unwrap();
+        let issues::Changed::Reread(thread) = changed else {
+            panic!("{change:?} was not re-read: {changed:?}");
+        };
+        assert_eq!(thread.issue.number, 4);
+        let calls = fake.calls();
+        let write = calls
+            .iter()
+            .position(|c| c.contains(expected))
+            .unwrap_or_else(|| panic!("{change:?}: no `{expected}` in {calls:#?}"));
+        let read = calls
+            .iter()
+            .rposition(|c| c.ends_with("--method GET repos/owner/repo/issues/4"))
+            .unwrap();
+        assert!(write < read, "{change:?} re-reads the issue after writing");
+    }
+}
+
+#[test]
+fn issue_change_failures_and_missing_labels() {
+    use issues::Change;
+    let fake = FakeGh::signed_in(ME);
+    issue_thread_fixture(&fake, 4, json!({"labels": []}));
+    fake.respond_prefix(
+        "api --hostname github.com --method DELETE repos/owner/repo/issues/4/labels/",
+        fake::fail("gh: Label does not exist (HTTP 404)"),
+    );
+    let github = GitHub::new(fake.gh());
+    let changed = run(github.change_issue(&project(), 4, &Change::SetReady(false))).unwrap();
+    let issues::Changed::Reread(thread) = changed else {
+        panic!("not re-read: {changed:?}");
+    };
+    assert!(!thread.issue.ready(), "an absent label is already removed");
+
+    fake.respond_prefix(
+        "api --hostname github.com --method PATCH",
+        fake::fail("gh: Must have admin rights to Repository. (HTTP 403)"),
+    );
+    let error = run(github.change_issue(&project(), 4, &Change::Reopen)).unwrap_err();
+    assert!(matches!(error, GhError::Forbidden(_)), "{error:?}");
+
+    let before = fake.calls().len();
+    assert!(run(github.change_issue(&project(), 4, &Change::Comment(" \n ".into()))).is_err());
+    assert_eq!(
+        fake.calls().len(),
+        before,
+        "a blank comment never reaches GitHub"
+    );
+}
+
+#[test]
+fn a_change_whose_reread_fails_still_reports_the_write() {
+    use issues::{Change, Changed};
+    let fake = FakeGh::signed_in(ME);
+    fake.respond_prefix(
+        "api --hostname github.com --method POST repos/owner/repo/issues/4/comments",
+        fake::ok(json!({"id": 9})),
+    );
+    fake.respond_prefix(
+        "api --hostname github.com --method GET repos/owner/repo/issues/4",
+        fake::fail("gh: Bad Gateway (HTTP 502)"),
+    );
+    let changed =
+        run(GitHub::new(fake.gh()).change_issue(&project(), 4, &Change::Comment("Once".into())))
+            .unwrap();
+    assert!(matches!(changed, Changed::Unread(_)), "{changed:?}");
+    assert_eq!(
+        fake.calls().iter().filter(|c| c.contains("POST")).count(),
+        1,
+        "the comment is posted once"
+    );
+}
