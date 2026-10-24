@@ -525,18 +525,27 @@ impl Nightshift {
                             );
                         }
                         this.status = status;
-                        this.issue.compose = None;
-                        this.issue.viewing = None;
-                        this.issue.draft_for = None;
-                        this.issue
-                            .title
-                            .update(cx, |input, cx| input.set_text("", cx));
-                        this.issue
-                            .body
-                            .update(cx, |input, cx| input.set_text("", cx));
-                        this.issue.scroll.set_offset(gpui::point(px(0.), px(0.)));
-                        this.apply_thread(project_id, thread, true, cx);
-                        this.focus.focus(window, cx);
+                        // The owner may have left or changed the form while GitHub answered;
+                        // keep newer text, and open the issue only from the unchanged form.
+                        let submitted =
+                            this.form_holds(project_id, None, &asked.title, &asked.body, cx);
+                        let composing = submitted && this.issue.compose.is_some();
+                        if submitted {
+                            this.issue.draft_for = None;
+                            this.issue
+                                .title
+                                .update(cx, |input, cx| input.set_text("", cx));
+                            this.issue
+                                .body
+                                .update(cx, |input, cx| input.set_text("", cx));
+                        }
+                        if composing {
+                            this.issue.compose = None;
+                            this.issue.viewing = None;
+                            this.issue.scroll.set_offset(gpui::point(px(0.), px(0.)));
+                            this.focus.focus(window, cx);
+                        }
+                        this.apply_thread(project_id, thread, composing, cx);
                     }
                     Ok(Err(error)) => this.form_error(error.to_string()),
                     Err(error) => this.form_error(error.to_string()),
@@ -545,6 +554,26 @@ impl Nightshift {
             });
         }));
         cx.notify();
+    }
+
+    /// Whether the form inputs still hold this submission: the same issue (`None` for a new
+    /// one) with unchanged text. A closed form counts when its draft was not replaced.
+    fn form_holds(
+        &self,
+        project_id: i64,
+        editing: Option<u32>,
+        title: &str,
+        body: &str,
+        cx: &Context<Self>,
+    ) -> bool {
+        let same_form = match &self.issue.compose {
+            Some(compose) => compose.project_id == project_id && compose.editing == editing,
+            None => true,
+        };
+        same_form
+            && self.issue.draft_for == Some((project_id, editing))
+            && self.issue.title.read(cx).text().trim() == title.trim()
+            && self.issue.body.read(cx).text() == body
     }
 
     fn form_error(&mut self, error: String) {
@@ -598,14 +627,19 @@ impl Nightshift {
                             {
                                 status = "GitHub did not assign you; check your access.".into();
                             }
-                            Change::Edit { .. } => {
-                                this.issue.compose = None;
+                            Change::Edit { title, body }
+                                if this.form_holds(project_id, Some(number), &title, &body, cx) =>
+                            {
                                 this.issue.draft_for = None;
-                                this.focus.focus(window, cx);
+                                if this.issue.compose.is_some() {
+                                    this.issue.compose = None;
+                                    this.focus.focus(window, cx);
+                                }
                             }
-                            // Clear the draft only if it still belongs to this issue.
-                            Change::Comment(_)
-                                if this.issue.comment_for == Some((project_id, number)) =>
+                            // Clear the draft only if it is still the posted text on this issue.
+                            Change::Comment(posted)
+                                if this.issue.comment_for == Some((project_id, number))
+                                    && *this.issue.comment.read(cx).text() == posted =>
                             {
                                 this.issue
                                     .comment
@@ -615,6 +649,9 @@ impl Nightshift {
                             _ => {}
                         }
                         this.status = format!("#{number}: {status}");
+                        // This re-read is newer than any load that started before the write.
+                        this.issue._load = None;
+                        this.issue.loading = false;
                         this.apply_thread(project_id, thread, false, cx);
                         None
                     }

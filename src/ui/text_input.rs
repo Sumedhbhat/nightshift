@@ -1137,6 +1137,9 @@ impl Render for TextInput {
             .aria_value(self.content.clone())
             .flex()
             .w_full()
+            // Clipping removes the automatic minimum height, so a scrolling column would
+            // otherwise shrink the field.
+            .flex_none()
             .overflow_hidden()
             .key_context("TextInput")
             .cursor(CursorStyle::IBeam)
