@@ -1,6 +1,7 @@
 //! GitHub access through the authenticated GitHub CLI, plus local checkout inspection.
 pub mod cli;
 pub mod eligibility;
+pub mod issues;
 
 use crate::domain::{NewProject, Project};
 use cli::{Gh, GhError};

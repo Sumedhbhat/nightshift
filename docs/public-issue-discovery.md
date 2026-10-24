@@ -13,8 +13,9 @@ The native folder picker accepts directories. Background Git commands discover t
 - Shortcuts written with ⌘ use Command on macOS and Ctrl on Linux, and the UI labels them that way. Text-field word movement uses Option-arrow on macOS and Ctrl-arrow on Linux.
 - `/` or ⌘F focuses the search field. Search has ordinary text editing, selection, copy, cut, and paste, with no Vim modes. Typing `/`, `j`, or `k` inside it inserts text.
 - Enter in search or ⌘R refreshes the selected project's first ten GitHub results. **Load more** fetches that project's next page. Esc or Down from search focuses results without clearing the query.
-- Up/Down or `j`/`k` browse matching results and scroll the selection into view. Enter opens the selected issue on GitHub.
+- Up/Down or `j`/`k` browse matching results and scroll the selection into view. Enter opens the selected issue in the [issue view](#issue-management).
 - ⌘1–⌘9 select the first nine projects in sidebar order, preserving the search query. Each row shows its shortcut suffix. ⌘0 shows All projects. An unassigned number does nothing.
+- ⌘N opens the new-issue form for the selected project. See [issue management](#issue-management) for its keys and the issue view's.
 - ⌘O adds a project. Tab and Shift-Tab move focus. Enter activates a focused control; Space also activates project, remote, and issue rows. The folder picker uses the platform's standard keyboard controls.
 - ⌘Q quits. macOS also exposes **Quit Nightshift** in the native Nightshift menu, using the same action and shortcut when focus is outside the main window.
 
@@ -42,6 +43,16 @@ Supported query syntax:
 A leading `-` also excludes title terms or repositories. `state:open` is accepted. Empty search matches all fetched open issues in the selected project. Unknown qualifiers, closed-issue searches, Boolean expressions, missing values, and unclosed quotes show a validation message and no results. The supported subset follows [GitHub's qualifier conventions](https://docs.github.com/en/issues/tracking-your-work-with-issues/using-issues/filtering-and-searching-issues-and-pull-requests); it does not call GitHub's search endpoint or search bodies, comments, closed issues, or repositories that have not been added.
 
 The field uses a standalone GPUI text-input entity adapted from the pinned GPUI input example. It handles Unicode grapheme movement, UTF-16 input-method ranges, selection, clipboard operations, and horizontal cursor scrolling. Search parsing lives in `src/issue_query.rs`; filtering and result navigation share the same visible-index calculation in `src/ui.rs`.
+
+## Issue management
+
+[MVP_CONCEPT.md](../MVP_CONCEPT.md#issue-management) defines the scope. The GitHub calls live in `src/github/issues.rs` and the view in `src/ui/issues.rs`.
+
+- **Reading.** Opening an issue reads `GET …/issues/{n}`, all of its comments through `GET …/issues/{n}/comments`, and the active account from `gh auth status`. Pull requests are rejected. A newer request for another issue replaces an older one, and every result is checked against the issue still on screen.
+- **Writing.** New issues use `POST …/issues` with optional `assignees` and `labels`. Edits, closing with `state_reason` `completed` or `not_planned`, and reopening use `PATCH …/issues/{n}`. Comments use `POST …/comments`. `ready-for-agent` is added with `POST …/labels` and removed with `DELETE …/labels/ready-for-agent`; a label that is already gone counts as removed. Assignment uses `POST` or `DELETE …/assignees` with the active login. After each write, Nightshift re-reads the issue and comments rather than trusting the response. Blank titles and comments are rejected before any request.
+- **Feedback.** GitHub silently drops assignees and labels the account cannot set. Nightshift compares the re-read issue with the request and says so in the status bar. Errors stay on the form or the issue view; the form keeps its text.
+- **List.** A successful write updates the matching row of the fetched list. A new or reopened issue is added, and a closed issue is removed, because the list holds open issues only. Only one write runs at a time.
+- **Input.** The title is a single-line field. The description and comment fields are multi-line inputs with soft wrapping, vertical scrolling, Up/Down movement, and Home/End within the line. Down in the title moves to the description. Esc in the comment field returns focus to the issue view.
 
 ## GitHub CLI adapter
 
@@ -83,6 +94,7 @@ Tests use an in-memory fake `gh` (`src/github/fake.rs`) and temporary Git reposi
 - each issue gate, parent rules, inherited and cross-repository blockers, and every closure reason, including an absent one;
 - inaccessible dependencies and failed lookups;
 - a finished local execution not resolving an open blocker;
+- reading an issue thread, rejecting pull requests, creating issues with and without assignment and labels, every issue change's endpoint and re-read, an absent label, a forbidden write, and blank input never reaching GitHub;
 - ordered start gates, push preflight against writable and unreachable remotes, and stale generations. Storage tests also verify that projects reload after reopening. Query tests cover combined title, label, and repository filters; quoted phrases; exclusions; label alternatives; empty queries; and invalid or unsupported syntax.
 
 For isolated native testing, set `NIGHTSHIFT_DATA_DIR` before launching the executable. Test projects then stay separate from normal application data.

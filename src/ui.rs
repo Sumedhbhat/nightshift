@@ -1,4 +1,5 @@
 mod executions;
+mod issues;
 mod perf_view;
 mod text_input;
 
@@ -59,7 +60,17 @@ actions!(
         DecreaseLimit,
         IncreaseLimit,
         FocusSetup,
-        InstallUpdate
+        InstallUpdate,
+        LeaveInput,
+        NewIssue,
+        SubmitIssue,
+        EditIssue,
+        CloseIssue,
+        CloseNotPlanned,
+        ToggleReady,
+        ToggleAssign,
+        FocusComment,
+        OpenOnGitHub
     ]
 );
 
@@ -117,6 +128,7 @@ struct Nightshift {
     _updates: Option<Task<()>>,
     _output_poll: Option<Task<()>>,
     update: UpdateState,
+    issue: issues::IssueUi,
 }
 
 /// A release downloaded in the background, installed when the owner restarts.
@@ -237,6 +249,7 @@ impl Nightshift {
             _updates: None,
             _output_poll: None,
             update: Default::default(),
+            issue: issues::IssueUi::new(cx),
             startup_report: std::env::var_os("NIGHTSHIFT_STARTUP_REPORT").map(|path| {
                 StartupReport {
                     path: path.into(),
@@ -398,6 +411,7 @@ impl Nightshift {
         };
         self.selected = selected;
         self.editing_setup = false;
+        self.close_issue_panels();
         self.executions.view = executions::View::Issues;
         let setup = self
             .projects
@@ -418,6 +432,13 @@ impl Nightshift {
         if self.executions.view == executions::View::Executions {
             self.focus.focus(window, cx);
             self.move_execution(forward, cx);
+            return;
+        }
+        if self.issue.compose.is_some() {
+            return;
+        }
+        if self.issue.viewing.is_some() {
+            self.scroll_issue(forward, cx);
             return;
         }
         let visible = self.visible_issues();
@@ -446,6 +467,7 @@ impl Nightshift {
         }
         self.busy = true;
         self.remotes.clear();
+        self.close_issue_panels();
         self.status = "Choose a local Git repository with a GitHub remote.".into();
         let picker = cx.prompt_for_paths(PathPromptOptions {
             files: false,
@@ -617,6 +639,17 @@ impl Nightshift {
             self.refresh_run(cx);
             return;
         }
+        // Enter in the issue title moves to the description; Cmd-R reloads the open issue.
+        if self.issue.compose.is_some() {
+            if self.issue.title.focus_handle(cx).is_focused(window) {
+                self.issue.body.focus_handle(cx).focus(window, cx);
+            }
+            return;
+        }
+        if self.issue.viewing.is_some() {
+            self.load_issue(cx);
+            return;
+        }
         self.fetch_issues(false, cx);
     }
 
@@ -765,6 +798,9 @@ impl Render for Nightshift {
         let in_executions = self.executions.view == executions::View::Executions;
         let run_bar = self.render_run_bar(cx).into_any_element();
         let executions_view = in_executions.then(|| self.render_executions(cx));
+        let issue_panel =
+            (!in_executions && self.issue.open()).then(|| self.render_issue_panel(cx));
+        let in_list = !in_executions && issue_panel.is_none();
         let setup_row = (self.selected.is_some() && self.editing_setup).then(|| {
             div()
                 .flex()
@@ -808,10 +844,25 @@ impl Render for Nightshift {
             .on_action(cx.listener(Self::load_more))
             .on_action(cx.listener(Self::select_project))
             .on_action(cx.listener(|this, _: &FocusSearch, window, cx| {
+                if this.executions.view == executions::View::Issues { this.close_issue_panels(); }
                 this.search_input.focus_handle(cx).focus(window, cx);
                 cx.notify();
             }))
+            .on_action(cx.listener(|this, _: &LeaveInput, window, cx| {
+                if this.issue.title.focus_handle(cx).is_focused(window) {
+                    this.issue.body.focus_handle(cx).focus(window, cx);
+                } else {
+                    window.dispatch_action(Box::new(FocusResults), cx);
+                }
+            }))
             .on_action(cx.listener(|this, _: &FocusResults, window, cx| {
+                // Esc in the comment field only leaves the field; elsewhere it closes the form, then the issue.
+                if this.issue.compose.is_none() && this.issue.comment.focus_handle(cx).is_focused(window) {
+                    this.focus.focus(window, cx);
+                    cx.notify();
+                    return;
+                }
+                if this.executions.view == executions::View::Issues && this.issue_back(window, cx) { return; }
                 this.editing_setup = false;
                 this.focus.focus(window, cx);
                 if this.active_issue.is_none() { this.move_issue(true, window, cx); }
@@ -819,11 +870,11 @@ impl Render for Nightshift {
             }))
             .on_action(cx.listener(|this, _: &NextIssue, window, cx| this.move_issue(true, window, cx)))
             .on_action(cx.listener(|this, _: &PreviousIssue, window, cx| this.move_issue(false, window, cx)))
-            .on_action(cx.listener(|this, _: &OpenIssue, _, cx| {
+            .on_action(cx.listener(|this, _: &OpenIssue, window, cx| {
                 if this.executions.view == executions::View::Executions {
                     this.open_pull_request(cx);
-                } else if let Some(row) = this.active_issue.and_then(|index| this.issues.get(index)) {
-                    cx.open_url(&row.issue.url);
+                } else if !this.issue.open() && let Some(index) = this.active_issue {
+                    this.view_issue(index, window, cx);
                 }
             }))
             .on_action(cx.listener(|this, _: &ShowExecutions, window, cx| this.show_executions(window, cx)))
@@ -834,6 +885,15 @@ impl Render for Nightshift {
             .on_action(cx.listener(|this, _: &IncreaseLimit, _, cx| this.change_limit(1, cx)))
             .on_action(cx.listener(|this, _: &FocusSetup, window, cx| this.edit_setup(window, cx)))
             .on_action(cx.listener(|this, _: &InstallUpdate, _, cx| this.install_update(cx)))
+            .on_action(cx.listener(|this, _: &NewIssue, window, cx| this.new_issue(window, cx)))
+            .on_action(cx.listener(move |this, _: &SubmitIssue, window, cx| if !in_executions { this.submit_issue(window, cx) }))
+            .on_action(cx.listener(move |this, _: &EditIssue, window, cx| if !in_executions && this.issue.compose.is_none() { this.edit_issue(window, cx) }))
+            .on_action(cx.listener(move |this, _: &CloseIssue, _, cx| if !in_executions { this.toggle_closed(false, cx) }))
+            .on_action(cx.listener(move |this, _: &CloseNotPlanned, _, cx| if !in_executions { this.toggle_closed(true, cx) }))
+            .on_action(cx.listener(move |this, _: &ToggleReady, _, cx| if !in_executions { this.toggle_ready(cx) }))
+            .on_action(cx.listener(move |this, _: &ToggleAssign, _, cx| if !in_executions { this.toggle_assign(cx) }))
+            .on_action(cx.listener(move |this, _: &FocusComment, window, cx| if !in_executions { this.focus_comment(window, cx) }))
+            .on_action(cx.listener(move |this, _: &OpenOnGitHub, _, cx| if !in_executions { this.open_issue_on_github(cx) }))
             .on_action(|_: &Close, window, _| window.remove_window())
             .on_action(|_: &NextFocus, window, cx| window.focus_next(cx))
             .on_action(|_: &PreviousFocus, window, cx| window.focus_prev(cx))
@@ -893,14 +953,20 @@ impl Render for Nightshift {
                 .child(div().flex_1().min_w_0().flex().flex_col().bg(rgb(PANEL))
                     .child(run_bar)
                     .children(executions_view)
-                    .when(!in_executions, |panel| panel
+                    .children(issue_panel)
+                    .when(in_list, |panel| panel
                     .child(div().p_5().flex_none().flex().flex_col().gap_3()
                         .child(div().flex().items_center().justify_between().gap_3()
                             .child(div().min_w_0().truncate().text_lg().child(heading))
-                            .children(self.selected.map(|_| button("edit-setup", format!("Setup  {MODIFIER}⇧S"), true)
-                                .key_context("Selectable")
-                                .on_action(cx.listener(|this, _: &Activate, window, cx| this.edit_setup(window, cx)))
-                                .on_click(cx.listener(|this, _, window, cx| this.edit_setup(window, cx))))))
+                            .children(self.selected.map(|_| div().flex_none().flex().gap_2()
+                                .child(button("new-issue", format!("New issue  {MODIFIER}N"), self.store.is_some())
+                                    .key_context("Selectable")
+                                    .on_action(cx.listener(|this, _: &Activate, window, cx| this.new_issue(window, cx)))
+                                    .on_click(cx.listener(|this, _, window, cx| this.new_issue(window, cx))))
+                                .child(button("edit-setup", format!("Setup  {MODIFIER}⇧S"), true)
+                                    .key_context("Selectable")
+                                    .on_action(cx.listener(|this, _: &Activate, window, cx| this.edit_setup(window, cx)))
+                                    .on_click(cx.listener(|this, _, window, cx| this.edit_setup(window, cx)))))))
                         .child(div().flex().items_center().gap_2()
                             .child(div().flex_1().min_w_0().child(self.search_input.clone()))
                             .child(button("refresh", if self.busy { "Fetching…".into() } else { format!("Refresh  {MODIFIER}R") }, !self.busy && self.selected.is_some())
@@ -939,8 +1005,6 @@ impl Render for Nightshift {
                                 }
                                 let issue_index = visible[index];
                                 let row = &this.issues[issue_index];
-                                let url = row.issue.url.clone();
-                                let keyboard_url = url.clone();
                                 let selected = this.active_issue == Some(issue_index);
                                 div().id(("issue", issue_index)).role(Role::Link)
                                     .aria_label(format!("{} #{} {}", row.repository, row.issue.number, row.issue.title))
@@ -950,12 +1014,8 @@ impl Render for Nightshift {
                                     .bg(rgb(if selected { LINE } else { PANEL }))
                                     .w_full().h(px(76.)).px_5().flex().flex_col().justify_center().gap_1()
                                     .cursor_pointer().hover(|s| s.bg(rgb(LINE)))
-                                    .on_action(move |_: &Activate, _, cx| cx.open_url(&keyboard_url))
-                                    .on_click(cx.listener(move |this, _, window, cx| {
-                                        this.active_issue = Some(issue_index);
-                                        this.focus.focus(window, cx);
-                                        cx.open_url(&url); cx.notify();
-                                    }))
+                                    .on_action(cx.listener(move |this, _: &Activate, window, cx| this.view_issue(issue_index, window, cx)))
+                                    .on_click(cx.listener(move |this, _, window, cx| this.view_issue(issue_index, window, cx)))
                                     .child(div().flex().items_center().gap_3()
                                         .child(div().flex_none().text_xs().text_color(rgb(MUTED)).child(format!("#{}", row.issue.number)))
                                         .child(div().min_w_0().truncate().child(row.issue.title.clone())))
@@ -1002,7 +1062,7 @@ pub fn run(runtime: Handle, startup: Startup, main_started: std::time::Instant) 
             KeyBinding::new("escape", FocusResults, Some("Nightshift")),
             KeyBinding::new("down", NextIssue, Some("Nightshift")),
             KeyBinding::new("up", PreviousIssue, Some("Nightshift")),
-            KeyBinding::new("down", FocusResults, Some("TextInput")),
+            KeyBinding::new("down", LeaveInput, Some("TextInput")),
             KeyBinding::new("up", gpui::NoAction, Some("TextInput")),
             KeyBinding::new("enter", SearchIssues, Some("TextInput")),
             KeyBinding::new("secondary-q", Quit, None),
@@ -1028,6 +1088,15 @@ pub fn run(runtime: Handle, startup: Startup, main_started: std::time::Instant) 
             KeyBinding::new("enter", RetryWorking, Some("RetryWorkingButton")),
             KeyBinding::new("enter", RecheckPublication, Some("RecheckButton")),
             KeyBinding::new("enter", OpenIssue, Some("OpenPullRequestButton")),
+            KeyBinding::new("secondary-n", NewIssue, Some("Nightshift")),
+            KeyBinding::new("secondary-enter", SubmitIssue, Some("Nightshift")),
+            KeyBinding::new("secondary-shift-e", EditIssue, Some("Nightshift")),
+            KeyBinding::new("secondary-shift-c", CloseIssue, Some("Nightshift")),
+            KeyBinding::new("secondary-shift-x", CloseNotPlanned, Some("Nightshift")),
+            KeyBinding::new("secondary-shift-l", ToggleReady, Some("Nightshift")),
+            KeyBinding::new("secondary-shift-a", ToggleAssign, Some("Nightshift")),
+            KeyBinding::new("secondary-shift-m", FocusComment, Some("Nightshift")),
+            KeyBinding::new("secondary-shift-o", OpenOnGitHub, Some("Nightshift")),
             KeyBinding::new("tab", NextFocus, Some("Nightshift")),
             KeyBinding::new("shift-tab", PreviousFocus, Some("Nightshift")),
         ]);

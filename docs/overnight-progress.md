@@ -1,6 +1,6 @@
 # Overnight progress
 
-Durable log for the autonomous MVP run. If a session restarts, read this file and continue from the first unchecked item. Decisions live in [decisions.md](decisions.md); the plan lives in [implementation-plan.md](implementation-plan.md).
+Durable log for the autonomous MVP run. If a session restarts, read this file and continue from the first unchecked item. Decisions live in [decisions.md](decisions.md). The implementation plan it followed is complete and was removed; its milestones are recorded below.
 
 ## Current state
 

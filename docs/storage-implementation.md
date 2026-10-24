@@ -1,6 +1,6 @@
 # Local persistence implementation
 
-This implements the storage and reservation portion of milestone 2 in the [implementation plan](implementation-plan.md). The UI now supports [public issue discovery](public-issue-discovery.md). Product scope remains in [MVP_CONCEPT.md](../MVP_CONCEPT.md).
+This describes storage and capacity reservation. The UI now supports [public issue discovery](public-issue-discovery.md). Product scope remains in [MVP_CONCEPT.md](../MVP_CONCEPT.md).
 
 ## Ownership and startup
 
@@ -12,7 +12,7 @@ The worker serializes requests through a 32-message channel. SQLite uses foreign
 
 ## Workflow and capacity rules
 
-Schema 2 (`002_workflow.sql`) implements the typed workflow from the [implementation plan](implementation-plan.md). It rebuilds the execution tables in one migration transaction. Schema 1 rows become legacy history: unconfirmed work becomes an interrupted record that keeps its slot, and confirmed work ends with a `legacy` outcome. Their events and output are preserved.
+Schema 2 (`002_workflow.sql`) implements the typed workflow described in [workflow-orchestration.md](workflow-orchestration.md). It rebuilds the execution tables in one migration transaction. Schema 1 rows become legacy history: unconfirmed work becomes an interrupted record that keeps its slot, and confirmed work ends with a `legacy` outcome. Their events and output are preserved.
 
 - **One record per issue.** An execution is created at `checking` from the issue's stable identity, the GitHub host, and the run owner. A unique index allows one non-legacy record per issue across all checkouts. Once a record reaches `working`, the issue is never started again (decision D4 in [decisions.md](decisions.md)). The parent-wide slot is gone; siblings run independently.
 - **Steps and statuses.** Steps are `checking`, `working`, `branch_published`, and `pull_request_published`. Triggers keep them monotonic. Statuses are `pending`, `running`, `error`, `interrupted`, and `ended`; `ended` is final and carries an outcome. Recoverable failures are step errors with the attempted transition, message, detail, and retry availability. Success clears the error in the same transaction (decision D6).

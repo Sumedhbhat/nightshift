@@ -1,6 +1,6 @@
 # Implementation decisions
 
-Routine choices made during the autonomous MVP run, with the reason and tradeoff. Product scope remains in [MVP_CONCEPT.md](../MVP_CONCEPT.md); the plan is in [implementation-plan.md](implementation-plan.md).
+Routine choices made during the autonomous MVP run, with the reason and tradeoff. Product scope remains in [MVP_CONCEPT.md](../MVP_CONCEPT.md).
 
 ## D1. Validation channels
 
@@ -166,3 +166,11 @@ Process output is spooled to storage in batches. If storage fails or its backlog
 **Reason.** `gh` is already a required, signed-in tool, so the check needs no new network client or credentials and follows the rule against anonymous GitHub requests. Staging before the restart keeps the slow work in the background, so restarting takes about as long as quitting. The checksum guards against truncated or substituted downloads. The ad-hoc signature only proves the bundle is intact.
 
 **Tradeoff.** Local, pull-request, and `-dev` builds never update. Neither do copies that cannot replace themselves: a Mac app run from the disk image, a translocated app, or one whose folder the owner cannot write to, and a Linux binary that is not the packaged `/usr/bin/nightshift`. A nightly build stays on nightlies even after the matching stable release ships. Restarting stops active work the same way quitting does, so Nightshift asks for a second confirmation while a run or execution is active.
+
+## D20. Issue management inside Nightshift
+
+**Decision.** The owner can create, read, edit, comment on, close, reopen, label, and assign issues in Nightshift's issue view. These are explicit owner actions through the authenticated GitHub CLI. Each write re-reads the issue and its comments. New issues are assigned to the owner by default and labeled `ready-for-agent` only when the owner asks. Runs, executions, and publication still never write to issues. Parent and dependency relationships stay on GitHub. See [issue management](public-issue-discovery.md#issue-management).
+
+**Reason.** The owner asked to manage the whole issue lifecycle in Nightshift instead of switching to GitHub. That replaces the earlier MVP exclusion of issue editing. The workflow already depends on assignment, the readiness label, and closure, so editing them where the work is watched removes the most frequent trip to the browser. Defaulting the label off prevents an unfinished draft from becoming run workload.
+
+**Tradeoff.** Descriptions and comments show as plain text without Markdown rendering. Comments cannot be edited or deleted, and closed issues are reachable only while still open in the view, because the list holds open issues only. The multi-line input has no goal column for vertical movement.
