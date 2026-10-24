@@ -169,7 +169,7 @@ Process output is spooled to storage in batches. If storage fails or its backlog
 
 ## D20. Issue management inside Nightshift
 
-**Decision.** The owner can create, read, edit, comment on, close, reopen, label, and assign issues in Nightshift's issue view. These are explicit owner actions through the authenticated GitHub CLI. Each write re-reads the issue and its comments. New issues are assigned to the owner by default and labeled `ready-for-agent` only when the owner asks. Runs, executions, and publication still never write to issues. Parent and dependency relationships stay on GitHub. See [issue management](public-issue-discovery.md#issue-management).
+**Decision.** The owner can create, read, edit, comment on, close, reopen, label, and assign issues in Nightshift's issue view. These are explicit owner actions through the authenticated GitHub CLI. Each change to an existing issue re-reads the issue and its comments; creation uses GitHub's response. New issues are assigned to the owner by default and labeled `ready-for-agent` only when the owner asks. Runs, executions, and publication still never write to issues. Parent and dependency relationships stay on GitHub. See [issue management](public-issue-discovery.md#issue-management).
 
 **Reason.** The owner asked to manage the whole issue lifecycle in Nightshift instead of switching to GitHub. That replaces the earlier MVP exclusion of issue editing. The workflow already depends on assignment, the readiness label, and closure, so editing them where the work is watched removes the most frequent trip to the browser. Defaulting the label off prevents an unfinished draft from becoming run workload.
 

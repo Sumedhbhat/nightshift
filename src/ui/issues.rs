@@ -35,6 +35,8 @@ pub(super) struct IssueUi {
     pub(super) comment: gpui::Entity<TextInput>,
     /// Which form the title and body inputs currently hold, so a cancelled draft survives.
     draft_for: Option<(i64, Option<u32>)>,
+    /// The issue the comment draft belongs to; another issue starts with an empty field.
+    comment_for: Option<(i64, u32)>,
     /// A write is in flight; one at a time.
     pub(super) busy: bool,
     loading: bool,
@@ -66,6 +68,7 @@ impl IssueUi {
                     .multiline(4)
             }),
             draft_for: None,
+            comment_for: None,
             busy: false,
             loading: false,
             scroll: gpui::ScrollHandle::new(),
@@ -149,6 +152,7 @@ impl Nightshift {
         let (project_id, repository, number) =
             (row.project_id, row.repository.clone(), row.issue.number);
         self.active_issue = Some(index);
+        self.own_comment((project_id, number), cx);
         self.issue.compose = None;
         self.issue.viewing = Some(Viewing {
             project_id,
@@ -184,7 +188,8 @@ impl Nightshift {
                 match result {
                     Ok(Ok(thread)) => {
                         this.status = format!("#{} loaded", thread.issue.number);
-                        this.apply_thread(key.0, thread, true);
+                        // A refresh only updates a view that is still open.
+                        this.apply_thread(key.0, thread, false, cx);
                     }
                     Ok(Err(error)) => this.view_error(key, error.to_string()),
                     Err(error) => this.view_error(key, error.to_string()),
@@ -205,7 +210,23 @@ impl Nightshift {
     }
 
     /// Show a fresh thread if it is still the viewed issue, and keep the list row in step.
-    fn apply_thread(&mut self, project_id: i64, thread: IssueThread, show: bool) {
+    /// Keep the comment draft only while it belongs to `key`.
+    fn own_comment(&mut self, key: (i64, u32), cx: &mut Context<Self>) {
+        if self.issue.comment_for != Some(key) {
+            self.issue
+                .comment
+                .update(cx, |input, cx| input.set_text("", cx));
+            self.issue.comment_for = Some(key);
+        }
+    }
+
+    fn apply_thread(
+        &mut self,
+        project_id: i64,
+        thread: IssueThread,
+        show: bool,
+        cx: &mut Context<Self>,
+    ) {
         let number = thread.issue.number;
         let position = self
             .issues
@@ -246,6 +267,7 @@ impl Nightshift {
             }
             _ if show => {
                 if let Some(project) = self.project(project_id) {
+                    self.own_comment((project_id, number), cx);
                     self.issue.viewing = Some(Viewing {
                         project_id,
                         repository: format!("{}/{}", project.owner, project.name),
@@ -513,7 +535,7 @@ impl Nightshift {
                             .body
                             .update(cx, |input, cx| input.set_text("", cx));
                         this.issue.scroll.set_offset(gpui::point(px(0.), px(0.)));
-                        this.apply_thread(project_id, thread, true);
+                        this.apply_thread(project_id, thread, true, cx);
                         this.focus.focus(window, cx);
                     }
                     Ok(Err(error)) => this.form_error(error.to_string()),
@@ -581,7 +603,10 @@ impl Nightshift {
                                 this.issue.draft_for = None;
                                 this.focus.focus(window, cx);
                             }
-                            Change::Comment(_) => {
+                            // Clear the draft only if it still belongs to this issue.
+                            Change::Comment(_)
+                                if this.issue.comment_for == Some((project_id, number)) =>
+                            {
                                 this.issue
                                     .comment
                                     .update(cx, |input, cx| input.set_text("", cx));
@@ -590,7 +615,7 @@ impl Nightshift {
                             _ => {}
                         }
                         this.status = format!("#{number}: {status}");
-                        this.apply_thread(project_id, thread, false);
+                        this.apply_thread(project_id, thread, false, cx);
                         None
                     }
                     Ok(Err(error)) => Some(error.to_string()),
