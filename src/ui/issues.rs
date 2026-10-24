@@ -649,9 +649,15 @@ impl Nightshift {
                             _ => {}
                         }
                         this.status = format!("#{number}: {status}");
-                        // This re-read is newer than any load that started before the write.
-                        this.issue._load = None;
-                        this.issue.loading = false;
+                        // For the written issue, this re-read is newer than a load that started
+                        // before the write. A load of another issue stays in flight.
+                        let viewed = this.issue.viewing.as_ref().is_some_and(|viewing| {
+                            viewing.project_id == project_id && viewing.number == number
+                        });
+                        if viewed {
+                            this.issue._load = None;
+                            this.issue.loading = false;
+                        }
                         this.apply_thread(project_id, thread, false, cx);
                         None
                     }
