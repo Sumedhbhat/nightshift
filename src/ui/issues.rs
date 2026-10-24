@@ -1,6 +1,6 @@
 //! The issue view and the new-issue and edit form. Every GitHub write here is an owner action.
 use super::*;
-use nightshift::github::issues::{Change, Draft, IssueThread};
+use nightshift::github::issues::{Change, Changed, Draft, IssueThread};
 
 const ERROR: u32 = 0xf2b8a5;
 /// Keyboard scrolling step in the issue view.
@@ -619,11 +619,17 @@ impl Nightshift {
             let _ = this.update_in(cx, |this, window, cx| {
                 this.issue.busy = false;
                 let error = match result {
-                    Ok(Ok(thread)) => {
+                    Ok(Ok(changed)) => {
+                        let thread = match changed {
+                            Changed::Reread(thread) => Some(thread),
+                            Changed::Unread(_) => None,
+                        };
                         let mut status = change.done().to_owned();
                         match change {
                             Change::SetAssigned(true)
-                                if !thread.issue.assigned_to(&thread.viewer) =>
+                                if thread
+                                    .as_ref()
+                                    .is_some_and(|t| !t.issue.assigned_to(&t.viewer)) =>
                             {
                                 status = "GitHub did not assign you; check your access.".into();
                             }
@@ -648,17 +654,33 @@ impl Nightshift {
                             }
                             _ => {}
                         }
-                        this.status = format!("#{number}: {status}");
-                        // For the written issue, this re-read is newer than a load that started
-                        // before the write. A load of another issue stays in flight.
                         let viewed = this.issue.viewing.as_ref().is_some_and(|viewing| {
                             viewing.project_id == project_id && viewing.number == number
                         });
-                        if viewed {
-                            this.issue._load = None;
-                            this.issue.loading = false;
+                        let reread = thread.is_some();
+                        let reload = !reread && viewed && this.issue.compose.is_none();
+                        match thread {
+                            Some(thread) => {
+                                // For the written issue, this re-read is newer than a load that
+                                // started before the write. A load of another issue stays in flight.
+                                if viewed {
+                                    this.issue._load = None;
+                                    this.issue.loading = false;
+                                }
+                                this.apply_thread(project_id, thread, false, cx);
+                            }
+                            // The write happened; reading it back failed. Never ask to resend.
+                            None if reload => this.load_issue(cx),
+                            None => {}
                         }
-                        this.apply_thread(project_id, thread, false, cx);
+                        this.status = format!("#{number}: {status}");
+                        if reload {
+                            this.status.push_str(". Reloading the issue…");
+                        } else if !reread {
+                            this.status.push_str(&format!(
+                                ", but reading it back failed. Open it and press {MODIFIER}R."
+                            ));
+                        }
                         None
                     }
                     Ok(Err(error)) => Some(error.to_string()),

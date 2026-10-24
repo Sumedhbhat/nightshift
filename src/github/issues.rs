@@ -112,6 +112,16 @@ pub struct Draft {
     pub ready: bool,
 }
 
+/// The result of a change GitHub accepted.
+#[derive(Debug)]
+pub enum Changed {
+    /// The issue as GitHub reports it after the change.
+    Reread(IssueThread),
+    /// The change was made, but reading the issue back failed. Comments are not idempotent,
+    /// so callers must not treat this as a failed write.
+    Unread(GhError),
+}
+
 /// One owner-requested change to an existing issue.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Change {
@@ -232,13 +242,13 @@ impl GitHub {
         })
     }
 
-    /// Apply one change, then return the issue as GitHub now reports it.
+    /// Apply one change, then read the issue back. `Err` means the change was not made.
     pub async fn change_issue(
         &self,
         project: &Project,
         number: u32,
         change: &Change,
-    ) -> GhResult<IssueThread> {
+    ) -> GhResult<Changed> {
         let path = format!("{}/issues/{number}", repo_path(project)?);
         match change {
             Change::Edit { title, body } => {
@@ -317,6 +327,9 @@ impl GitHub {
                     .await?;
             }
         }
-        self.issue_thread(project, number).await
+        Ok(match self.issue_thread(project, number).await {
+            Ok(thread) => Changed::Reread(thread),
+            Err(error) => Changed::Unread(error),
+        })
     }
 }

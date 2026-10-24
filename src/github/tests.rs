@@ -806,7 +806,10 @@ fn issue_changes_use_the_matching_endpoint_and_reread_the_issue() {
             fake::ok(json!([])),
         );
         issue_thread_fixture(&fake, 4, json!({}));
-        let thread = run(GitHub::new(fake.gh()).change_issue(&project(), 4, &change)).unwrap();
+        let changed = run(GitHub::new(fake.gh()).change_issue(&project(), 4, &change)).unwrap();
+        let issues::Changed::Reread(thread) = changed else {
+            panic!("{change:?} was not re-read: {changed:?}");
+        };
         assert_eq!(thread.issue.number, 4);
         let calls = fake.calls();
         let write = calls
@@ -831,7 +834,10 @@ fn issue_change_failures_and_missing_labels() {
         fake::fail("gh: Label does not exist (HTTP 404)"),
     );
     let github = GitHub::new(fake.gh());
-    let thread = run(github.change_issue(&project(), 4, &Change::SetReady(false))).unwrap();
+    let changed = run(github.change_issue(&project(), 4, &Change::SetReady(false))).unwrap();
+    let issues::Changed::Reread(thread) = changed else {
+        panic!("not re-read: {changed:?}");
+    };
     assert!(!thread.issue.ready(), "an absent label is already removed");
 
     fake.respond_prefix(
@@ -847,5 +853,28 @@ fn issue_change_failures_and_missing_labels() {
         fake.calls().len(),
         before,
         "a blank comment never reaches GitHub"
+    );
+}
+
+#[test]
+fn a_change_whose_reread_fails_still_reports_the_write() {
+    use issues::{Change, Changed};
+    let fake = FakeGh::signed_in(ME);
+    fake.respond_prefix(
+        "api --hostname github.com --method POST repos/owner/repo/issues/4/comments",
+        fake::ok(json!({"id": 9})),
+    );
+    fake.respond_prefix(
+        "api --hostname github.com --method GET repos/owner/repo/issues/4",
+        fake::fail("gh: Bad Gateway (HTTP 502)"),
+    );
+    let changed =
+        run(GitHub::new(fake.gh()).change_issue(&project(), 4, &Change::Comment("Once".into())))
+            .unwrap();
+    assert!(matches!(changed, Changed::Unread(_)), "{changed:?}");
+    assert_eq!(
+        fake.calls().iter().filter(|c| c.contains("POST")).count(),
+        1,
+        "the comment is posted once"
     );
 }
