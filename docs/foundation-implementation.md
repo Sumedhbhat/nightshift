@@ -1,6 +1,6 @@
 # Native foundation implementation
 
-This starts milestone 1 of the [implementation plan](implementation-plan.md). Product scope remains in [MVP_CONCEPT.md](../MVP_CONCEPT.md). The synthetic replay does not establish execution completion, authorize runs, or implement publication.
+This describes the native foundation. Product scope remains in [MVP_CONCEPT.md](../MVP_CONCEPT.md). The synthetic replay does not establish execution completion, authorize runs, or implement publication.
 
 The synthetic screen described here is historical. The application now opens the [project and public issue scaffold](public-issue-discovery.md); replay remains a library test utility.
 
